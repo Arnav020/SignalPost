@@ -1,0 +1,112 @@
+"""Offline regression tests (stdlib unittest; no network). Run: python -m unittest discover -s tests"""
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from signalpost.claims import Envelope, add_financial_claims  # noqa: E402
+from signalpost.cli import read_inputs  # noqa: E402
+from signalpost.extract import extract_page, find_org_numbers, valid_org_number  # noqa: E402
+from signalpost.financials import parse_accounts  # noqa: E402
+from signalpost.refresh import apply_refresh  # noqa: E402
+from signalpost.registry import Registry, host_key  # noqa: E402
+from signalpost.website import Candidate, SiteCrawler, SiteResult, build_candidates, guess_candidates  # noqa: E402
+
+
+class OrgNumbers(unittest.TestCase):
+    def test_checksum(self):
+        self.assertTrue(valid_org_number("979543883"))  # DIPS AS
+        self.assertFalse(valid_org_number("979543884"))
+
+    def test_find_formats(self):
+        text = "Org.nr: 979 543 883 MVA · tlf 12345678 · NO979543883MVA"
+        self.assertEqual(find_org_numbers(text), {"979543883"})
+
+
+class Inputs(unittest.TestCase):
+    def _write(self, name, text):
+        path = Path(tempfile.mkdtemp()) / name
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_formats(self):
+        self.assertEqual(read_inputs(self._write("a.jsonl", '{"organisation_number":"979543883"}\n{"organisation_number":"810034882"}\n')), ["979543883", "810034882"])
+        self.assertEqual(read_inputs(self._write("a.json", '["979543883", "810034882"]')), ["979543883", "810034882"])
+        self.assertEqual(read_inputs(self._write("a.json", '{"organisation_numbers": ["979543883"]}')), ["979543883"])
+        self.assertEqual(read_inputs(self._write("a.txt", "979543883\n810 034 882\n")), ["979543883", "810 034 882"])
+        self.assertEqual(read_inputs(self._write("a.csv", "organisation_number,name\n979543883,DIPS AS\n")), ["979543883"])
+
+
+class Candidates(unittest.TestCase):
+    def test_shared_email_domain_not_exclusive(self):
+        reg = Registry()
+        for org in ("111111111", "222222222"):
+            reg._own("styrerommet.no", org)
+        reg._own("sandneselektriske.no", "810034882")
+        cands, _ = build_candidates("810034882", {"website": "", "email": "post@sandneselektriske.no"}, [], reg)
+        self.assertEqual([(c.host, c.exclusive) for c in cands], [("sandneselektriske.no", True)])
+        cands, _ = build_candidates("111111111", {"website": "", "email": "x@styrerommet.no"}, [], reg)
+        self.assertEqual(cands, [])  # directory/manager host filtered
+
+    def test_registry_social_as_website(self):
+        cands, social = build_candidates("1", {"website": "www.facebook.com/minbedrift", "email": "a@gmail.com"}, [], Registry())
+        self.assertEqual(cands, [])
+        self.assertEqual(social[0]["platform"], "facebook")
+
+    def test_no_guess_for_housing(self):
+        self.assertEqual(guess_candidates("1", {"name": "LIENE BORETTSLAG", "legal_form": "BRL"}, Registry()), [])
+        self.assertTrue(guess_candidates("1", {"name": "NORDCAD AS", "legal_form": "AS"}, Registry()))
+
+    def test_host_key(self):
+        self.assertEqual(host_key("https://www.Dips.com/no/"), "dips.com")
+        self.assertEqual(host_key("post@dips.no"), "dips.no")
+
+
+class SocialFilter(unittest.TestCase):
+    def test_partner_links_dropped(self):
+        html = """<html><head><title>Pinovo</title></head><body>
+        <a href="https://www.linkedin.com/company/pinovo">LinkedIn</a>
+        <a href="https://www.linkedin.com/company/deloitte">partner</a>
+        <a href="https://www.facebook.com/pinovo">fb</a></body></html>"""
+        page = extract_page(html, "https://pinovo.no/")
+        site = SiteResult(candidate=Candidate("https://pinovo.no/", "pinovo.no", "name_guess", True, 1), home_url="https://pinovo.no/")
+        social = {u: {"platform": p, "url": u, "source_url": "https://pinovo.no/"} for p, us in page["social"].items() for u in us}
+        kept = SiteCrawler._own_profiles({"name": "PINOVO AS"}, site, social, [], page)
+        self.assertEqual(sorted(kept), ["https://www.facebook.com/pinovo", "https://www.linkedin.com/company/pinovo"])
+
+
+class FinancialsAndRefresh(unittest.TestCase):
+    BODY = [{"regnskapsperiode": {"fraDato": "2025-01-01", "tilDato": "2025-12-31"}, "valuta": "NOK", "regnskapstype": "SELSKAP",
+             "virksomhet": {"morselskap": False}, "resultatregnskapResultat": {"aarsresultat": 10.0, "driftsresultat": {"driftsinntekter": {"sumDriftsinntekter": 100.0}}}}]
+
+    class Res:
+        status, retrieved_at, sha256, blocked, error = 200, "2026-10-16T00:00:00Z", "abc", False, None
+
+    def test_missing_values_not_zero(self):
+        filings = parse_accounts(self.BODY)
+        self.assertEqual(set(filings[0]["values"]), {"net_result", "revenue"})  # nothing invented
+
+    def test_refresh_idempotent_and_detects_change(self):
+        env = Envelope("123456785", "r1", "t")
+        add_financial_claims(env, parse_accounts(self.BODY), self.Res(), {})
+        changes, state = apply_refresh(env, None, "t1", True)
+        self.assertEqual(changes, [])
+        env2 = Envelope("123456785", "r2", "t")
+        add_financial_claims(env2, parse_accounts(self.BODY), self.Res(), {})
+        changes, state2 = apply_refresh(env2, json.loads(json.dumps(state)), "t2", True)
+        self.assertEqual(changes, [])  # idempotent rerun
+        body = json.loads(json.dumps(self.BODY))
+        body[0]["resultatregnskapResultat"]["aarsresultat"] = 20.0
+        env3 = Envelope("123456785", "r3", "t")
+        add_financial_claims(env3, parse_accounts(body), self.Res(), {})
+        changes, _ = apply_refresh(env3, state2, "t3", True)
+        self.assertEqual([(c["field"], c["previous_value"], c["current_value"]) for c in changes], [("net_result", 10.0, 20.0)])
+
+
+if __name__ == "__main__":
+    unittest.main()

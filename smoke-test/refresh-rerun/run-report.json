@@ -1,0 +1,74 @@
+{
+  "run_id": "smoke-run-2",
+  "agent": "signalpost-agent",
+  "agent_version": "1.0.0",
+  "provisional": false,
+  "started_at": "2026-10-15T21:49:18Z",
+  "completed_at": "2026-10-15T21:51:26Z",
+  "inputs": 100,
+  "emitted_envelopes": 100,
+  "operations": {
+    "max_requests": 2000,
+    "requests": 335,
+    "requests_by_source_class": {
+      "official_annual_accounts": 100,
+      "official_jobs_feed": 84,
+      "company_website_robots": 55,
+      "company_website": 74,
+      "company_website_feed": 6,
+      "company_website_sitemap": 16
+    },
+    "bytes": 49763744,
+    "elapsed_s": 128.0,
+    "third_party_cost_usd": 0.0
+  },
+  "registry_sources": {
+    "entities": {
+      "url": "https://data.brreg.no/enhetsregisteret/api/enheter/lastned/csv",
+      "path": ".cache\\enheter.csv.gz",
+      "origin": "run_cache",
+      "retrieved_at": "2026-10-15T20:28:58Z",
+      "sha256": "cfd5738e1c0bf808dae004fffd9dfe9a549467b0d5038c872f6df91b828d3041"
+    },
+    "subunits": {
+      "url": "https://data.brreg.no/enhetsregisteret/api/underenheter/lastned/csv",
+      "path": ".cache\\underenheter.csv.gz",
+      "origin": "run_cache",
+      "retrieved_at": "2026-10-15T20:26:02Z",
+      "sha256": "f71a8a12b3570ca51f94be01e7b3d8cad92f3b139621d8fe4660ebb07fa23f56"
+    },
+    "roles": {
+      "url": "https://data.brreg.no/enhetsregisteret/api/roller/totalbestand",
+      "path": ".cache\\roller.json.gz",
+      "origin": "run_cache",
+      "retrieved_at": "2026-10-15T20:23:25Z",
+      "sha256": "dd706c82c4e080dd3548cd5a913d3a35e66da042249126aa506ee0f6b9e02f78"
+    }
+  },
+  "registry_errors": [],
+  "claim_states": {
+    "available": 8532,
+    "not_available": 481,
+    "ambiguous": 3
+  },
+  "website_identity_outcomes": {
+    "unreachable": 43,
+    "parked": 2,
+    "shared_site": 6,
+    "ambiguous": 8,
+    "strong": 8,
+    "exact": 3,
+    "conflict": 2
+  },
+  "companies_with_verified_website": 11,
+  "validation": {
+    "passed": true,
+    "exact_one_envelope_per_input": true,
+    "unique_valid_organisations": 100
+  },
+  "models_and_apis": {
+    "llm": null,
+    "third_party_paid_apis": null,
+    "cost_usd": 0.0
+  }
+}

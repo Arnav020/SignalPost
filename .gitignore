@@ -1,0 +1,10 @@
+.cache/
+state/
+out/
+dev/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.part
+*.tmp
