@@ -69,6 +69,11 @@ def build_summary(env: Envelope, changes: list[dict]) -> dict:
     employees = _first(env, "registered_employees")
     if employees:
         say(f"The registry lists {employees['value']} employees.", [employees], "size")
+    filed = next((c for c in _available(env, "workforce") if c.get("key", "").startswith("workforce.") and c["key"] != "workforce.registry"), None)
+    if filed:
+        v = filed["value"]
+        what = "full-time equivalents (årsverk)" if v["measure"] == "full_time_equivalents" else "employees"
+        say(f"Its {v['year']} annual accounts state {v['value']} {what}" + (" — the company reports no staff." if v["value"] == 0 else "."), [filed], "size")
     revenue = sorted(_available(env, "revenue", "annual_accounts"), key=lambda c: c["reporting_period"]["end"], reverse=True)
     result = sorted(_available(env, "net_result", "annual_accounts"), key=lambda c: c["reporting_period"]["end"], reverse=True)
     equity = sorted(_available(env, "equity", "annual_accounts"), key=lambda c: c["reporting_period"]["end"], reverse=True)
@@ -156,9 +161,18 @@ def build_summary(env: Envelope, changes: list[dict]) -> dict:
 
     # Changes ---------------------------------------------------------------------
     material = [c for c in changes if c.get("material")]
+    previous = getattr(env, "previous_run_id", None)
     if changes:
-        statements.append({"topic": "changes", "text": f"Since the previous run: {len(changes)} change(s), {len(material)} material "
-                                                        f"({', '.join(sorted({c['change_type'] for c in changes}))}).", "evidence_ids": []})
+        ids = sorted({e for c in changes for e in (c.get("current_evidence_ids") or []) + (c.get("previous_evidence_ids") or [])})
+        examples = "; ".join(f"{c['field'].replace('_', ' ')}: {str(c.get('previous_value'))[:40]} → {str(c.get('current_value'))[:40]}"
+                             for c in material[:3])
+        statements.append({"topic": "changes", "text": f"Since the previous run ({previous}): {len(changes)} change(s), {len(material)} material "
+                                                        f"({', '.join(sorted({c['change_type'] for c in changes}))})" + (f" — {examples}." if examples else "."),
+                           "evidence_ids": ids})
+    elif previous:
+        statements.append({"topic": "changes", "text": f"No changes since the previous run ({previous}); all earlier evidence remains valid.", "evidence_ids": []})
+    else:
+        statements.append({"topic": "changes", "text": "First observation of this company: no previous snapshot to compare against.", "evidence_ids": []})
     unknowns_text = " ".join(unknowns)
     return {
         "headline": statements[0]["text"] if statements else None,

@@ -367,7 +367,7 @@ class SiteCrawler:
         elif cand.origin == "name_guess":
             # Guessed domains need hard proof: our number (handled above) or brand-in-title + domain + contact match.
             site.identity = "strong" if (domain_name and name_match and corroborations) else "ambiguous"
-        elif cand.origin in ("registry_website", "nav_employer_homepage"):
+        elif cand.origin in ("registry_website", "nav_employer_homepage", "wikidata_website"):
             # Declared by the company itself in an official source tied to its organisation number.
             site.identity = "strong" if named and (corroborations or name_in_head or domain_name) else "registry_declared"
         elif named and corroborations or (name_in_head and domain_name) or corroborations >= 2 and named:
@@ -434,6 +434,7 @@ class SiteCrawler:
         emails, phones = {}, {}
         jsonld_orgs, jobs, news, ats = [], [], [], []
         careers_url = None
+        news_page = None
         for url, page in pages:
             for platform, urls in page["social"].items():
                 for value in urls:
@@ -459,6 +460,7 @@ class SiteCrawler:
                         label = link["label"] if 6 <= len(link["label"]) <= 140 else title_from_slug(link["url"])
                         jobs.append({"title": label, "url": link["url"], "source_url": url, "method": "careers_page_link", "date_posted": None})
             if kind == "news":
+                news_page = {"url": url, "title": page.get("title")}
                 for link in page["internal_links"]:
                     if classify_url(link["url"]) == "news" and link["url"].rstrip("/") != url.rstrip("/") and 12 <= len(link["label"]) <= 200:
                         date = parse_date(link["label"])
@@ -508,6 +510,8 @@ class SiteCrawler:
             "careers_page": careers_url,
             "ats_links": ats,
             "news": news,
+            "news_page": news_page,
+            "pages_captured": sum(1 for p in site.pages if p.get("status") == 200),
             "leaders_on_site": leaders_on_site[:10],
             "org_numbers_seen": sorted({o for _, p in pages for o in p["org_numbers"]})[:10],
         }

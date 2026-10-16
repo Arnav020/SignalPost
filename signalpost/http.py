@@ -131,7 +131,7 @@ class Http:
             return result
         try:
             self.budget.take(source_class, reserved=reserved)
-        except BudgetExhausted as exc:
+        except BudgetExhausted:
             result.error = "budget_exhausted"
             result.blocked = True
             return result
@@ -170,6 +170,32 @@ class Http:
         result.retrieved_at = utc_now()
         return result
 
+    def post_form(self, url: str, source_class: str, data: dict, accept: str, timeout: float = 60.0) -> FetchResult:
+        """Budgeted POST for query APIs whose request does not fit in a URL (e.g. SPARQL)."""
+        result = FetchResult(url=url, retrieved_at=utc_now())
+        if not is_safe_public_url(url):
+            result.error = "unsafe_or_unresolvable_url"
+            return result
+        try:
+            self.budget.take(source_class)
+        except BudgetExhausted:
+            result.error = "budget_exhausted"
+            result.blocked = True
+            return result
+        started = time.monotonic()
+        try:
+            response = self.session.post(url, data=data, headers={"Accept": accept}, timeout=(10, timeout))
+            result.status = response.status_code
+            result.final_url = response.url
+            result.content_type = response.headers.get("Content-Type", "")
+            result.body = response.content[:8_000_000]
+            self.budget.add_bytes(len(result.body))
+        except requests.RequestException as exc:
+            result.error = type(exc).__name__
+        result.elapsed_ms = int((time.monotonic() - started) * 1000)
+        result.retrieved_at = utc_now()
+        return result
+
     def get_with_headers(self, url: str, source_class: str, headers: dict, timeout: float = 30.0) -> FetchResult:
         return self.get(url, source_class, timeout=timeout, extra_headers=headers, max_bytes=8_000_000)
 
@@ -179,7 +205,7 @@ class Http:
 
         result = FetchResult(url=url, retrieved_at=utc_now())
         try:
-            self.budget.take(source_class, reserved=True)
+            self.budget.take(source_class, reserved="registry")
         except BudgetExhausted:
             result.error = "budget_exhausted"
             return result

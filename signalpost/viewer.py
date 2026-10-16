@@ -19,6 +19,10 @@ FIELD_LABELS = {
     "website_address": "Address (website)", "careers_page": "Careers page", "recruiting_system_link": "Recruiting system",
     "job_posting": "Job posting", "news_item": "News / activity", "registry_event": "Registry event", "annual_accounts_filing": "Filing",
     "latest_filed_accounts_year": "Latest filed accounts",
+    "workforce": "Workforce", "site_snapshot": "Website snapshot", "news_page": "News page", "wikidata_entity": "Wikidata",
+    "directory_profile": "Directory profile", "review_summary": "Rating", "wikipedia_article": "Wikipedia",
+    "wikidata_employees": "Employees (Wikidata)", "employer_self_description": "Employer description (NAV ad)",
+    "hiring_status": "Hiring status", "shared_website": "Shared website",
 }
 FIN_ORDER = ["revenue", "operating_result", "profit_before_tax", "net_result", "total_assets", "equity", "total_debt", "cash", "payroll_costs"]
 
@@ -29,6 +33,16 @@ def _fmt(value) -> str:
     if isinstance(value, bool):
         return "Yes" if value else "No"
     if isinstance(value, dict):
+        if "measure" in value and "value" in value:
+            return f"{value['value']} {value.get('label') or value['measure']}" + (f" ({value['year']})" if value.get("year") else "")
+        if "pages_captured" in value:
+            return f"{value.get('pages_captured')} pages captured, {value.get('verified_social_links')} verified profile links"
+        if "rating" in value:
+            return f"{value['rating']}/5 from {value.get('review_count')} reviews — {value.get('provider')}"
+        if "active_job_ads" in value:
+            return f"{value['active_job_ads']} active job ad(s) ({value.get('source')})"
+        if "labels" in value and "url" in value:
+            return ", ".join(value.get("labels") or []) or value["url"]
         if "platform" in value:
             return f"{value['platform']}: {value.get('url')}"
         if "name" in value and "role" in value:
@@ -73,7 +87,13 @@ def compact(envelope: dict) -> dict:
         })
     reg = next((c for c in envelope.get("claims", []) if c["field"] == "business_address" and c["availability"] == "available"), None)
     ind = next((c for c in envelope.get("claims", []) if c["field"] == "industry" and c["availability"] == "available"), None)
+    try:
+        from .ask import _metrics
+        metrics = _metrics(envelope)[0] if envelope.get("claims") else {}
+    except Exception:
+        metrics = {}
     return {
+        "m": metrics,
         "o": envelope.get("organisation_number"), "n": envelope.get("legal_name") or envelope.get("input"),
         "city": (reg["value"].get("municipality") or reg["value"].get("city")) if reg else None,
         "ind": ind["value"].get("label") if ind else None,
@@ -122,6 +142,8 @@ a{color:var(--accent);word-break:break-word}.muted{color:var(--muted)}.chips{dis
 <div class="controls"><input type="search" id="q" placeholder="Search name, org number, city, industry…" aria-label="Search">
 <select id="flt" aria-label="Filter"><option value="">All companies</option><option value="web">Verified website</option><option value="jobs">Hiring signals</option><option value="fin">Accounts available</option><option value="chg">Changed since last run</option></select>
 <button id="theme" title="Toggle theme">◐</button></div>
+<div class="controls" style="margin-top:8px"><input type="search" id="scr" placeholder="Screen: e.g. companies in Oslo with more than 5 employees top 10 by revenue" aria-label="Screen companies"><button id="scrgo">Screen</button></div>
+<div class="meta" id="plan"></div>
 <div class="meta" id="meta"></div></header>
 <main><div id="list" role="list"></div><div id="detail"><p class="muted">Select a company to see its evidence-backed profile.</p></div></main>
 <div id="cmp"></div>
@@ -135,7 +157,7 @@ document.getElementById('meta').textContent=D.length+' companies · generated '+
 function has(c,k){if(k==='web')return c.facts.some(f=>f.f==='official_website'&&f.a==='available');if(k==='jobs')return c.facts.some(f=>(f.f==='job_posting'||f.f==='careers_page')&&f.a==='available');if(k==='fin')return Object.keys(c.fin).length>0;if(k==='chg')return c.ch.length>0;return true}
 function score(c){return c.facts.filter(f=>f.a==='available').length}
 function renderList(){const q=document.getElementById('q').value.toLowerCase().trim(),k=document.getElementById('flt').value;
- const rows=D.filter(c=>has(c,k)&&(!q||[c.n,c.o,c.city,c.ind].join(' ').toLowerCase().includes(q))).sort((a,b)=>score(b)-score(a));
+ const rows=D.filter(c=>(!screenRows||screenRows.includes(c.o))&&has(c,k)&&(!q||[c.n,c.o,c.city,c.ind].join(' ').toLowerCase().includes(q))).sort((a,b)=>screenRows?screenRows.indexOf(a.o)-screenRows.indexOf(b.o):score(b)-score(a));
  L.innerHTML=rows.map(c=>`<div class="item ${cur===c.o?'active':''}" role="listitem" tabindex="0" data-o="${c.o}"><b>${esc(c.n)}</b><small>${esc(c.o)} · ${esc(c.city||'')} · ${esc(c.ind||'')}</small><div class="dots">${SECS.map(([s,l])=>`<span class="dot ${c.sec[s]||''}" title="${l}: ${c.sec[s]||'n/a'}"></span>`).join('')}</div></div>`).join('')||'<p class="muted" style="padding:14px">No matches.</p>';
  L.querySelectorAll('.item').forEach(e=>{e.onclick=()=>show(e.dataset.o);e.onkeydown=ev=>{if(ev.key==='Enter')show(e.dataset.o)}})}
 function srcs(f){return f.src.map(s=>`<a href="${esc(s.u)}" target="_blank" rel="noopener" title="${esc(s.s)}">${esc((s.c||'source').replace(/_/g,' '))}</a> ${esc(s.t)}`).join(' · ')}
@@ -144,6 +166,7 @@ function show(o){const c=D.find(x=>x.o===o);cur=o;document.body.classList.add('s
  const ev={};c.facts.forEach(f=>f.src.forEach(s=>ev[s.u]=1));
  let h=`<button class="back" onclick="document.body.classList.remove('show-detail')">← Back</button><h2>${esc(c.n)}</h2><div class="muted">${esc(c.o)} · ${esc(c.city||'')} · ${esc(c.ind||'')} · <a href="https://virksomhet.brreg.no/nb/oppslag/enheter/${c.o}" target="_blank" rel="noopener">Brønnøysund record</a></div>
  <p><button onclick="toggleCmp('${c.o}')">${cmp.has(c.o)?'Remove from':'Add to'} comparison</button></p><div class="chips">${SECS.map(([s,l])=>`<span class="chip">${l}: <span class="state ${c.sec[s]}">${c.sec[s]||'n/a'}</span></span>`).join('')}</div>
+ <h3>Ask about this company</h3><div class="controls"><input type="search" id="ask" placeholder="e.g. Who runs it? Is it hiring? How are the latest numbers?" onkeydown="if(event.key==='Enter')askCompany('${c.o}')"><button onclick="askCompany('${c.o}')">Ask</button></div><div id="askout"></div>
  <h3>Summary</h3><div class="sum">${c.sum.map(s=>`<p>${esc(s.text)}</p>`).join('')}${c.unk.length?`<p class="muted"><b>Unknown:</b> ${c.unk.map(esc).join(' ')}</p>`:''}</div>`;
  const years=[...new Set(Object.values(c.fin).flatMap(x=>Object.keys(x)))].sort().reverse();
  if(years.length){h+=`<h3>Annual accounts (NOK)</h3><table><tr><th>Item</th>${years.map(y=>`<th>${y}</th>`).join('')}</tr>${Object.entries(c.fin).map(([k,v])=>`<tr><td>${esc(k.replace(/_/g,' '))}</td>${years.map(y=>`<td>${v[y]?`<a href="${esc(v[y].src[0]?.u)}" target="_blank" rel="noopener" title="Regnskapsregisteret">${money(v[y].v)}</a>`:'<span class=muted>–</span>'}</td>`).join('')}</tr>`).join('')}</table><p class="src">Source: official annual accounts, Regnskapsregisteret · filing copies: ${years.map(y=>`<a href="https://data.brreg.no/regnskapsregisteret/regnskap/aarsregnskap/kopi/${c.o}/${y}" target="_blank" rel="noopener">${y} PDF</a>`).join(' · ')}</p>`}
@@ -159,6 +182,30 @@ function renderCmp(){const box=document.getElementById('cmp');if(!cmp.size){box.
  const val=(c,f)=>c.facts.filter(x=>x.f===f&&x.a==='available').length;
  const rows=[['Revenue',c=>latest(c,'revenue')],['Net result',c=>latest(c,'net_result')],['Equity',c=>latest(c,'equity')],['Employees',c=>(c.facts.find(x=>x.f==='registered_employees'&&x.a==='available')||{}).v||'–'],['Website',c=>(c.facts.find(x=>x.f==='official_website'&&x.a==='available')||{}).v||'–'],['Workplaces',c=>val(c,'registered_workplace')],['Social profiles',c=>val(c,'social_profile')],['Job postings',c=>val(c,'job_posting')]];
  box.innerHTML=`<b>Compare</b> <button onclick="cmp.clear();renderCmp()">Clear</button><table><tr><th></th>${cs.map(c=>`<th>${esc(c.n)}</th>`).join('')}</tr>${rows.map(([l,fn])=>`<tr><td>${l}</td>${cs.map(c=>`<td>${esc(fn(c))}</td>`).join('')}</tr>`).join('')}</table>`}
+const UNSUP=/glassdoor|sentiment|buzz|loudest|traffic|velocity|culture|fraud|popular|reputation|no website|without (a )?website/i;
+let screenRows=null;
+function amount(v,u){const n=parseFloat(v.replace(',','.'));u=(u||'').toLowerCase();return n*(/^(billion|mrd|bn)$/.test(u)?1e9:/^(million|mill|mnok|m)$/.test(u)?1e6:/^(k|thousand)$/.test(u)?1e3:1)}
+function planScreen(q){q=q.toLowerCase().trim();const f=[];const c=q.match(/\b(?:in|i|located in|based in)\s+([a-zæøå][a-zæøå\- ]+?)(?=\s+(?:with|that|and|having|med|top|sorted|by)\b|$)/);if(c)f.push({field:'municipality',operator:'eq',value:c[1].trim().toUpperCase()});
+ const ops=[['(?:more than|over|above|greater than|>)\\s*','>'],['(?:at least|minimum|>=)\\s*','>='],['(?:fewer than|less than|under|below|<)\\s*','<'],['(?:at most|maximum|<=)\\s*','<=']];const NUM='(?:nok\\s*)?(\\d+(?:[.,]\\d+)?)\\s*(million|mill|mnok|m\\b|billion|mrd|bn|k\\b|thousand)?';
+ for(const [metric,pat] of [['employees','(?:registered\\s+)?(?:employees|ansatte|staff)'],['revenue','(?:revenue|turnover|omsetning|sales)']]){for(const [w,op] of ops){const m=q.match(new RegExp(pat+'\\s*(?:of\\s*)?'+w+NUM))||q.match(new RegExp(w+NUM+'\\s*(?:registered\\s+)?'+pat));if(m){f.push({field:metric,operator:op,value:metric==='revenue'?amount(m[1],m[2]):parseFloat(m[1].replace(',','.'))});break}}}
+ const fm=q.match(/(?:legal form|organisation form|organization form|form)\s*(?:=|is|:)?\s*([a-zæøå]{2,4})\b/);if(fm)f.push({field:'legal_form',operator:'eq',value:fm[1].toUpperCase()});
+ if(/\b(with|having|has) (a )?(verified )?website\b/.test(q))f.push({field:'website',operator:'exists',value:true});if(/\bhiring\b|job (ads|postings)|open roles/.test(q))f.push({field:'hiring',operator:'exists',value:true});
+ const s=q.match(/(?:top|largest|biggest)\s*(\d+)?\s*(?:by|on)?\s*(revenue|employees|equity|result|profit)?/);let order=null;if(s&&(s[2]||q.includes('top')))order={field:({profit:'net_result',result:'net_result'})[s[2]]||s[2]||'revenue',limit:s[1]?+s[1]:null};return {filters:f,order}}
+function runScreen(){const q=document.getElementById('scr').value.trim();const box=document.getElementById('plan');if(!q){screenRows=null;box.textContent='';renderList();return}
+ if(UNSUP.test(q)){screenRows=[];box.textContent='Abstained: this screen needs a signal that is not collected from permitted sources.';renderList();return}
+ const p=planScreen(q);if(!p.filters.length&&!p.order){screenRows=[];box.textContent='Abstained: no supported filter recognised (municipality, employees, revenue, legal form, website, hiring, top N by revenue/employees).';renderList();return}
+ let rows=D.filter(c=>p.filters.every(f=>{const v=(c.m||{})[f.field];if(f.operator==='exists')return !!v;if(v==null)return false;if(f.operator==='eq')return String(v).toUpperCase()===String(f.value).toUpperCase();return ({'>':v>f.value,'>=':v>=f.value,'<':v<f.value,'<=':v<=f.value})[f.operator]}));
+ if(p.order){rows=rows.filter(c=>(c.m||{})[p.order.field]!=null).sort((a,b)=>b.m[p.order.field]-a.m[p.order.field]);if(p.order.limit)rows=rows.slice(0,p.order.limit)}
+ screenRows=rows.map(c=>c.o);box.textContent='Plan: '+p.filters.map(f=>f.field+' '+f.operator+' '+f.value).join(' AND ')+(p.order?' · sorted by '+p.order.field+(p.order.limit?' (top '+p.order.limit+')':''):'')+' · '+rows.length+' match(es); unknown values never pass a filter';renderList()}
+document.getElementById('scrgo').onclick=runScreen;document.getElementById('scr').onkeydown=e=>{if(e.key==='Enter')runScreen()};
+function askCompany(o){const q=document.getElementById('ask').value.toLowerCase();const c=D.find(x=>x.o===o);const out=document.getElementById('askout');
+ if(UNSUP.test(q)){out.innerHTML='<p class="muted">Abstained: not collected from permitted sources.</p>';return}
+ const T={finance:/financ|account|revenue|turnover|profit|result|debt|asset|equity|number/,leadership:/lead|ceo|chair|board|role|runs|owner/,locations:/location|where|address|office|workplace/,web:/website|social|linkedin|facebook|instagram|profile|online/,hiring:/hiring|job|recruit|work|employee|staff|workforce/,activity:/news|activity|update|recent|change/};
+ const S={finance:'annual_accounts',leadership:'leadership_and_workplaces',locations:'leadership_and_workplaces',web:'website_and_profiles',hiring:'hiring_and_activity',activity:'hiring_and_activity'};
+ const hit=Object.keys(T).filter(k=>T[k].test(q));const secs=new Set((hit.length?hit:Object.keys(T)).map(k=>S[k]));
+ const fs=c.facts.filter(f=>secs.has(f.s)&&f.a==='available');let h=fs.slice(0,25).map(f=>`<div class="fact"><div class="l">${esc(f.l)}</div><div>${f.u?`<a href="${esc(f.u)}" target="_blank" rel="noopener">${esc(f.v)}</a>`:esc(f.v)}<div class="src">${srcs(f)}</div></div></div>`).join('');
+ if(secs.has('annual_accounts')&&Object.keys(c.fin).length)h='<p>Financial figures are in the accounts table above; each cell links to Regnskapsregisteret.</p>'+h;
+ out.innerHTML=h||'<p class="muted">No published evidence answers this; missing data stays missing.</p>'}
 document.getElementById('q').oninput=renderList;document.getElementById('flt').onchange=renderList;
 document.getElementById('theme').onclick=()=>{const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'};
 renderList();const first=new URLSearchParams(location.hash.slice(1)).get('org');if(first)show(first);

@@ -108,5 +108,38 @@ class FinancialsAndRefresh(unittest.TestCase):
         self.assertEqual([(c["field"], c["previous_value"], c["current_value"]) for c in changes], [("net_result", 10.0, 20.0)])
 
 
+class Workforce(unittest.TestCase):
+    def test_statements(self):
+        from signalpost.workforce import extract_workforce
+        self.assertEqual(extract_workforce("Note 1\nAntall årsverk i regnskapsåret\n3.00\n")[0], 3)
+        self.assertEqual(extract_workforce("Tal på årsverk i rekneskapsåret 0 00")[0], 0)
+        self.assertEqual(extract_workforce("Selskapet har i 2025 sysselsatt 1,5 årsverk.")[0], 1.5)
+        self.assertEqual(extract_workforce("Selskapet har ingen ansatte.")[0], 0)
+
+    def test_abstains(self):
+        from signalpost.workforce import extract_workforce
+        self.assertIsNone(extract_workforce("Antall årsverk i regnskapsåret 100"))  # "1.00" with a lost dot
+        self.assertIsNone(extract_workforce("Konsernet har 40 årsverk. Antall årsverk i konsernet 40"))
+        self.assertIsNone(extract_workforce("Lønnskostnader 120 000"))
+
+
+class ResearchAgent(unittest.TestCase):
+    def test_suite_queries_plan_exactly(self):
+        from signalpost.ask import plan_screen
+        cases = {
+            "companies in Oslo with above 7 employees": [("municipality", "eq", "OSLO"), ("employees", ">", 7)],
+            "legal form = STI": [("legal_form", "eq", "STI")],
+            "companies with fewer than 100 employees": [("employees", "<", 100)],
+            "companies with revenue >= NOK 250 million": [("revenue", ">=", 250000000)],
+        }
+        for query, expected in cases.items():
+            self.assertEqual([(f["field"], f["operator"], f["value"]) for f in plan_screen(query)["filters"]], expected)
+
+    def test_abstention(self):
+        from signalpost.ask import screen
+        self.assertTrue(screen([], "find the highest Glassdoor culture scores")["abstained"])
+        self.assertTrue(screen([], "which businesses are probably fraudulent")["abstained"])
+
+
 if __name__ == "__main__":
     unittest.main()

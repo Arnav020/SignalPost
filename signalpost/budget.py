@@ -1,4 +1,4 @@
-"""Global run budget: outbound requests, wall-clock deadline and declared third-party cost."""
+"""Global run budget: outbound requests (with named reservations), wall-clock deadline and declared cost."""
 from __future__ import annotations
 
 import threading
@@ -18,33 +18,38 @@ class Budget:
         # Stop starting new optional work once this point is reached, leaving time to finalize.
         self.soft_deadline = self.deadline - reserve_s
         self.requests = 0
-        self.reserved = 0
+        self.pools: dict[str, int] = {}
         self.bytes = 0
         self.by_class: Counter[str] = Counter()
         self.cost_usd = 0.0
         self._lock = threading.Lock()
+
+    @property
+    def reserved(self) -> int:
+        return sum(self.pools.values())
 
     # Requests -----------------------------------------------------------------
     def remaining(self) -> int:
         with self._lock:
             return self.max_requests - self.requests - self.reserved
 
-    def reserve(self, count: int) -> bool:
-        """Set aside requests for a mandatory phase so optional work cannot consume them."""
+    def reserve(self, count: int, pool: str = "default") -> bool:
+        """Set aside requests for a phase so other work cannot consume them."""
         with self._lock:
-            if self.requests + self.reserved + count > self.max_requests:
+            if count <= 0 or self.requests + self.reserved + count > self.max_requests:
                 return False
-            self.reserved += count
+            self.pools[pool] = self.pools.get(pool, 0) + count
             return True
 
-    def release(self, count: int) -> None:
+    def release(self, pool: str = "default") -> None:
         with self._lock:
-            self.reserved = max(0, self.reserved - count)
+            self.pools.pop(pool, None)
 
-    def take(self, source_class: str, reserved: bool = False) -> None:
+    def take(self, source_class: str, reserved: bool | str = False) -> None:
+        pool = "default" if reserved is True else (reserved or None)
         with self._lock:
-            if reserved and self.reserved > 0:
-                self.reserved -= 1
+            if pool and self.pools.get(pool, 0) > 0:
+                self.pools[pool] -= 1
             elif self.requests + self.reserved >= self.max_requests:
                 raise BudgetExhausted("outbound request budget exhausted")
             self.requests += 1

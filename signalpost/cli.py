@@ -17,14 +17,17 @@ from . import AGENT_NAME, __version__
 from .budget import Budget
 from .claims import (SECTIONS, Envelope, add_financial_claims, add_nav_claims, add_registry_activity, add_registry_claims,
                      add_role_claims, add_subunit_claims, add_web_claims, normalize_roles)
-from .extract import valid_org_number
 from .financials import fetch_accounts
 from .http import Http, utc_now
 from .refresh import StateStore, apply_refresh, state_from_envelope
 from .registry import fetch_entity_live, fetch_roles_live, fetch_subunits_live, load_registry
 from .synthesis import build_summary
 from .viewer import write_viewer
+from .claims import add_directory_claims, add_wikidata_claims, add_workforce_claims
+from .directory import fetch_directory_page, sitemap_hits
 from .nav_jobs import NavJobs
+from .wikidata import fetch_wikidata
+from .workforce_runner import WorkforceRunner, default_workers, estimated_capacity
 from .registry import host_key
 from .website import DIRECTORY_HOSTS, PLATFORM_HOSTS, Candidate, SiteCrawler, build_candidates, guess_candidates
 
@@ -84,7 +87,7 @@ def run(args) -> int:
     run_id = args.run_id or datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ")
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    budget = Budget(args.max_requests, args.time_budget_min * 60, reserve_s=max(90, args.time_budget_min * 60 * 0.12))
+    budget = Budget(args.max_requests, args.time_budget_min * 60, reserve_s=max(120, args.time_budget_min * 60 * 0.18))
     http = Http(budget, workers=args.workers)
     raw_inputs = read_inputs(Path(args.input))
     orgs: list[str] = []
@@ -98,12 +101,12 @@ def run(args) -> int:
     log(f"{AGENT_NAME} {__version__}: {len(raw_inputs)} inputs ({len(unique)} unique valid), budget {args.max_requests} requests / {args.time_budget_min} min")
 
     # Mandatory phases first: registry bulk (3) and one accounts call per company.
-    budget.reserve(3)
+    budget.reserve(3, "registry")
     registry = load_registry(http, unique, Path(args.cache_dir), max_age_hours=args.registry_max_age_hours,
                              provided_dir=Path(args.registry_dir) if args.registry_dir else None, log=log,
                              entity_file=Path(args.bulk) if args.bulk else None)
-    budget.release(budget.reserved)
-    fin_reserved = budget.reserve(len(unique)) and not args.no_financials
+    budget.release("registry")
+    fin_reserved = (not args.no_financials) and budget.reserve(len(unique), "accounts")
 
     envs: dict[str, Envelope] = {org: Envelope(org, run_id, started_at) for org in unique}
     entities: dict[str, dict] = {}
@@ -141,6 +144,24 @@ def run(args) -> int:
     # Write provisional envelopes immediately so a hard kill can never drop a row.
     write_outputs(out_dir, raw_inputs, orgs, envs, entities, {}, run_id, started_at, budget, registry, provisional=True)
 
+    # CPU-bound workforce connector runs in the background for the whole run (OCR of official annual-account copies).
+    runner = None
+    if not args.no_workforce:
+        jobs = [(org, entities[org]["latest_submitted_accounts"]) for org in unique
+                if entities.get(org) and str(entities[org].get("latest_submitted_accounts") or "").isdigit()]
+        jobs.sort(key=lambda j: (bool(entities[j[0]].get("employees")), entities[j[0]].get("legal_form") not in ("AS", "ASA")))
+        workers = args.ocr_workers or default_workers()
+        capacity = estimated_capacity(workers, budget.soft_deadline - time.monotonic() - 60)
+        # Requests not needed by mandatory phases: accounts are reserved separately; ~150 cover NAV, Wikidata and directory.
+        free = max(0, budget.remaining() - (0 if fin_reserved else len(unique)) - 150)
+        cap = min(len(jobs), capacity, int(free * args.workforce_share))
+        if cap and budget.reserve(cap, "workforce"):
+            runner = WorkforceRunner(http, jobs, request_cap=cap, workers=workers, log=log, cache_dir=Path(args.cache_dir) / "ocr")
+            runner.start()
+            log(f"workforce: started for {len(jobs)} filings (reserved {cap} requests; OCR capacity ~{capacity} with {workers} workers)")
+        else:
+            log("workforce: no request budget or time available")
+
     # Phase A: official accounts.
     filings: dict[str, tuple] = {}
     if not args.no_financials:
@@ -149,12 +170,12 @@ def run(args) -> int:
         def accounts(org):
             if budget.past_soft_deadline():
                 return org, None, None
-            return (org, *fetch_accounts(http, org, reserved=fin_reserved))
+            return (org, *fetch_accounts(http, org, reserved="accounts" if fin_reserved else False))
 
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             for org, parsed, res in pool.map(accounts, unique):
                 filings[org] = (parsed, res)
-        budget.release(budget.reserved)
+        budget.release("accounts")
         log(f"accounts: done ({budget.requests} requests used)")
 
     # Phase A2: official NAV job feed (exact employer organisation number).
@@ -189,6 +210,25 @@ def run(args) -> int:
             nav_status.update(loaded=False, error=f"{type(exc).__name__}: {exc}")
             log(f"nav: failed ({exc})")
 
+    # Phase A3: open data and directory (a handful of requests for the whole batch).
+    wikidata: dict[str, dict] = {}
+    if not args.no_wikidata:
+        try:
+            wikidata, wmeta = fetch_wikidata(http, unique)
+            log(f"wikidata: {len(wikidata)} entities ({wmeta.get('error') or 'ok'})")
+        except Exception as exc:
+            log(f"wikidata: failed ({exc})")
+    directory_pages: dict[str, dict] = {}
+    if not args.no_directory:
+        try:
+            hits, dmeta = sitemap_hits(http, set(unique))
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                for org, page in zip(hits, pool.map(lambda o: fetch_directory_page(http, o, hits[o]), hits)):
+                    directory_pages[org] = page
+            log(f"directory: {len(hits)} pages ({dmeta.get('error') or 'ok'})")
+        except Exception as exc:
+            log(f"directory: failed ({exc})")
+
     # Phase B: website discovery + crawl, ordered by expected value.
     sites: dict[str, object] = {}
     attempts: dict[str, list] = {org: [] for org in unique}
@@ -204,6 +244,14 @@ def run(args) -> int:
                     url = home if home.startswith("http") else "https://" + home
                     found.insert(0 if not found or found[0].origin != "registry_website" else 1,
                                  Candidate(url=url, host=host, origin="nav_employer_homepage", exclusive=True, owners=1))
+                    known.add(host)
+            extra = [(u, "wikidata_website") for u in (wikidata.get(org) or {}).get("sites", [])]
+            extra += [(u, "directory_listing") for u in ((directory_pages.get(org) or {}).get("same_as") or []) if isinstance(u, str)]
+            for raw_url, origin in extra:
+                host = host_key(raw_url)
+                if host and host not in known and not any(p in host for p in PLATFORM_HOSTS + DIRECTORY_HOSTS) and registry.owners(host) <= {org}:
+                    url = raw_url if raw_url.lower().startswith("http") else "https://" + raw_url
+                    found.append(Candidate(url=url, host=host, origin=origin, exclusive=True, owners=1))
                     known.add(host)
             cands[org] = (found, declared)
         else:
@@ -267,6 +315,13 @@ def run(args) -> int:
         guess_map = {o: [c for c in cands[o][0] if c.origin == "name_guess"] for o in guess_queue}
         run_pass(guess_queue, lambda o: guess_map[o], 4, "name-guess")
 
+    # Let OCR use the remaining time up to the soft deadline.
+    workforce_results: dict[str, dict] = {}
+    workforce_status: dict = {"skipped_reason": "Workforce connector disabled for this run."}
+    if runner is not None:
+        runner.join_until(budget.soft_deadline - time.monotonic())
+        workforce_results, workforce_status = dict(runner.results), dict(runner.status)
+
     # Assemble envelopes.
     store = StateStore(Path(args.state_dir))
     previous_from_file = {}
@@ -299,6 +354,9 @@ def run(args) -> int:
                 site = sites.get(org)
                 add_nav_claims(env, nav_ads.get(org), nav_status) if not args.no_jobs else None
                 add_web_claims(env, cands[org][0], cands[org][1], site, attempts.get(org))
+                add_wikidata_claims(env, wikidata.get(org))
+                add_directory_claims(env, directory_pages.get(org))
+                add_workforce_claims(env, workforce_results.get(org), workforce_status, bool(entity.get("employees")))
                 add_registry_activity(env, entity, roles.get(org), parsed)
                 env.drop_superseded_absences()
             prev = previous_from_file.get(org) or store.load(org)
@@ -313,6 +371,14 @@ def run(args) -> int:
             env.errors.append({"stage": "assemble", "error": f"{type(exc).__name__}: {exc}", "trace": traceback.format_exc(limit=3)})
             env.failed = True
     report = write_outputs(out_dir, raw_inputs, orgs, envs, entities, sites, run_id, started_at, budget, registry, provisional=False)
+    report["connectors"] = {
+        "workforce_annual_accounts_ocr": workforce_status,
+        "nav_job_feed": {k: v for k, v in nav_status.items() if k != "retrieved_at"},
+        "nav_confirmed_companies": len(nav_ads),
+        "wikidata_entities": len(wikidata),
+        "directory_pages": len(directory_pages),
+    }
+    (out_dir / "run-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     write_viewer(out_dir / "envelopes.jsonl", out_dir / "report.html")
     log(f"done: {report['emitted_envelopes']} envelopes, {report['operations']['requests']} requests, {report['operations']['elapsed_s']}s -> {out_dir}")
     return 0 if report["validation"]["passed"] else 1
@@ -414,6 +480,12 @@ def main(argv=None) -> int:
     parser.add_argument("--no-guess", action="store_true", help="Disable name-derived domain discovery")
     parser.add_argument("--no-jobs", action="store_true", help="Disable the NAV job feed connector")
     parser.add_argument("--jobs-days", type=int, default=int(os.environ.get("SIGNALPOST_JOBS_DAYS", 40)))
+    parser.add_argument("--no-workforce", action="store_true", help="Disable OCR of annual-account copies")
+    parser.add_argument("--workforce-share", type=float, default=float(os.environ.get("SIGNALPOST_WORKFORCE_SHARE", 0.7)),
+                        help="Share of the non-mandatory request budget available for annual-account copies")
+    parser.add_argument("--ocr-workers", type=int, default=int(os.environ["SIGNALPOST_OCR_WORKERS"]) if os.environ.get("SIGNALPOST_OCR_WORKERS") else None)
+    parser.add_argument("--no-wikidata", action="store_true")
+    parser.add_argument("--no-directory", action="store_true")
     parser.add_argument("--dry-state", action="store_true", help="Do not update the refresh store")
     args = parser.parse_args(argv)
     started = time.monotonic()

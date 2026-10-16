@@ -1,13 +1,17 @@
-[03:19:18] signalpost-agent 1.0.0: 100 inputs (100 unique valid), budget 2000 requests / 45.0 min
-[03:19:30] [registry] entities: run_cache parsed in 13s
-[03:19:36] [registry] subunits: run_cache parsed in 5s
-[03:19:44] [registry] roles: run_cache parsed in 8s
-[03:19:44] accounts: fetching 100 companies
-[03:19:46] accounts: done (100 requests used)
-[03:20:51] nav: 83 feed pages, 27484 ads, 9375 active
-[03:20:51] nav: 0 candidate ads checked, 0 confirmed for 0 companies
-[03:20:51] web: 18 companies with website candidates; 1816 requests left
-[03:20:57] web[registry]: 18 companies; verified so far 6; 240 requests used, 99s
-[03:21:22] web[name-guess]: 56 companies; verified so far 11; 335 requests used, 125s
-[03:21:26] done: 100 envelopes, 335 requests, 128.0s -> smoke-test\refresh-rerun
-[03:21:26] total wall time 128s
+[01:24:24] signalpost-agent 2.0.0: 100 inputs (100 unique valid), budget 2000 requests / 45.0 min
+[01:24:37] [registry] entities: run_cache parsed in 12s
+[01:24:42] [registry] subunits: run_cache parsed in 5s
+[01:24:50] [registry] roles: run_cache parsed in 8s
+[01:24:50] workforce: started for 100 filings (reserved 100 requests; OCR capacity ~510 with 12 workers)
+[01:24:50] accounts: fetching 100 companies
+[01:24:52] accounts: done (102 requests used)
+[01:25:52] nav: 85 feed pages, 28043 ads, 9535 active
+[01:25:52] nav: 0 candidate ads checked, 0 confirmed for 0 companies
+[01:25:54] wikidata: 1 entities (ok)
+[01:26:11] directory: 1 pages (ok)
+[01:26:11] web: 18 companies with website candidates; 1705 requests left
+[01:26:17] web[registry]: 18 companies; verified so far 5; 283 requests used, 113s
+[01:26:42] web[name-guess]: 57 companies; verified so far 9; 371 requests used, 138s
+[01:28:23] workforce: 95 statements from 100 filings (100 processed, backend rapidocr, 12 workers, 213.2s)
+[01:28:26] done: 100 envelopes, 417 requests, 241.3s -> smoke-test\refresh-rerun
+[01:28:26] total wall time 242s

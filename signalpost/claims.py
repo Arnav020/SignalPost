@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 
 from .financials import ACCOUNT_COPY, ACCOUNTS_API
 from .registry import ENTITY_API, ENTITY_PAGE, ROLES_API, SUBUNITS_API
@@ -19,6 +18,17 @@ SECTIONS = [
 ]
 STATES = {"available", "not_available", "blocked", "not_applicable", "ambiguous", "failed"}
 CONFIDENCE = {"exact": 0.98, "strong": 0.9, "registry_declared": 0.75}
+# External field families, named after Builderr's own observation signal types.
+SIGNAL_TYPES = {
+    "official_website": "company_profile", "public_brand_name": "company_profile", "website_description": "company_profile",
+    "wikidata_entity": "company_profile", "directory_profile": "company_profile", "employer_self_description": "company_profile",
+    "social_profile": "profile_handle", "site_snapshot": "profile_metrics", "website_contact_email": "company_profile",
+    "website_contact_phone": "company_profile", "website_address": "place_summary", "news_item": "public_post",
+    "news_page": "public_post", "wikipedia_article": "public_mention", "job_posting": "job_posting",
+    "hiring_status": "job_posting", "careers_page": "job_posting", "recruiting_system_link": "job_posting",
+    "workforce": "workforce_snapshot", "wikidata_employees": "workforce_snapshot", "review_summary": "review_summary",
+    "leader_named_on_website": "company_profile", "shared_website": "company_profile",
+}
 
 
 def _sha(value) -> str:
@@ -102,6 +112,9 @@ class Envelope:
             "evidence_ids": evidence_ids,
         }
         item.update({k: v for k, v in extra.items() if v is not None})
+        if field in SIGNAL_TYPES:
+            item["signal_type"] = SIGNAL_TYPES[field]
+            item["external"] = True
         self.claims.append(item)
         return item
 
@@ -198,6 +211,9 @@ def add_registry_claims(env: Envelope, entity: dict, registry_meta: dict, live: 
     if entity.get("employees"):
         env.claim(sec, "registered_employees", int(float(entity["employees"])), E, effective_date=entity.get("employees_registered_at") or None,
                   note="Employee count as registered in Enhetsregisteret (from the NAV Aa-register).")
+        env.claim("hiring_and_activity", "workforce", {"value": int(float(entity["employees"])), "measure": "registered_employees",
+                                                       "label": "employees registered in Enhetsregisteret (NAV Aa-register)"},
+                  E, key="workforce.registry", effective_date=entity.get("employees_registered_at") or None)
     elif truthy(entity.get("has_registered_employees")):
         env.absent(sec, "registered_employees", "not_available", "The registry flags registered employees but publishes no count.", E)
     else:
@@ -385,7 +401,9 @@ def add_web_claims(env: Envelope, candidates, declared_social: list[dict], site,
     origin_label = {"registry_website": "declared as hjemmeside in Enhetsregisteret", "registry_email": "domain of the registered email address",
                     "subunit_website": "declared as website of a registered workplace", "subunit_email": "domain of a registered workplace email",
                     "name_guess": "domain derived from the legal name, confirmed on the site",
-                    "nav_employer_homepage": "employer homepage in an official NAV job ad carrying this organisation number"}[site.candidate.origin]
+                    "nav_employer_homepage": "employer homepage in an official NAV job ad carrying this organisation number",
+                    "wikidata_website": "official website (P856) on the Wikidata item carrying this organisation number",
+                    "directory_listing": "website listed on a directory page carrying this organisation number"}[site.candidate.origin]
     env.claim(web, "official_website", home, [ev_home], confidence=conf, identity_level=site.identity, discovered_via=origin_label,
               identity_proofs=site.proofs or None)
     if site.identity == "registry_declared":
@@ -395,6 +413,15 @@ def add_web_claims(env: Envelope, candidates, declared_social: list[dict], site,
         env.absent(act, "job_posting", "ambiguous", "The registry-listed site does not name this company; its content is not attributed.")
         env.absent(act, "news_item", "ambiguous", "The registry-listed site does not name this company; its content is not attributed.")
         return
+    env.claim(web, "site_snapshot", {"home_url": home, "pages_captured": x.get("pages_captured"),
+                                     "verified_social_links": len(x.get("social_profiles") or []),
+                                     "structured_organisation_records": len(x.get("jsonld_organizations") or []),
+                                     "interpretation": "Observed site surface of the verified company website; not traffic or popularity."},
+              [ev_home], confidence=conf)
+    if x.get("news_page"):
+        ev = _page_evidence(env, site, x["news_page"]["url"], x["news_page"].get("title"), "news_page_fetch")
+        env.claim("hiring_and_activity", "news_page", {"url": x["news_page"]["url"], "title": x["news_page"].get("title")}, [ev],
+                  confidence=conf, note="Company-owned news/activity page on the verified website.")
     if x.get("brand_name"):
         env.claim("legal_identity_and_brand", "public_brand_name", x["brand_name"], [ev_home], confidence=conf)
     if x.get("description"):
@@ -481,6 +508,66 @@ def add_nav_claims(env: Envelope, ads: list[dict] | None, nav_status: dict) -> N
         ev = env.add_evidence(source_url=first["ad_url"], source_class="official_job_feed", retrieved_at=first["retrieved_at"],
                               content_sha256=first["sha256"], span=desc[:200], method="nav_employer_description")
         env.claim("legal_identity_and_brand", "employer_self_description", desc, [ev], confidence=0.95, note="Employer-written text in an official NAV job ad.")
+
+
+def add_wikidata_claims(env: Envelope, rec: dict | None) -> None:
+    if not rec:
+        return
+    web = "website_and_profiles"
+    ev = env.add_evidence(source_url=rec["item"], source_class="open_data_wikidata", retrieved_at=rec.get("retrieved_at") or env.started_at,
+                          content_sha256=rec.get("sha256"), span=f"P2333 (Norwegian organisation number) = {env.org}", method="wikidata_sparql_p2333",
+                          extra={"licence": "CC0"})
+    env.claim("legal_identity_and_brand", "wikidata_entity", {"url": rec["item"], "labels": rec.get("labels") or None}, [ev], confidence=0.97,
+              identity_basis="wikidata_item_states_this_organisation_number")
+    for platform, url in (rec.get("profiles") or {}).items():
+        env.claim(web, "social_profile", {"platform": platform, "url": url}, [ev], key=f"social.{platform}.{url.lower()}", confidence=0.95,
+                  identity_basis="wikidata_item_states_this_organisation_number")
+    for value in rec.get("employees") or []:
+        env.claim("hiring_and_activity", "wikidata_employees", value, [ev], confidence=0.85, note="Employee count recorded on Wikidata (community-maintained).")
+    if rec.get("article"):
+        env.claim("hiring_and_activity", "wikipedia_article", rec["article"], [ev], confidence=0.97)
+
+
+def add_directory_claims(env: Envelope, page: dict | None) -> None:
+    if not page or page.get("status") != "ok":
+        return
+    ev = env.add_evidence(source_url=page["url"], source_class="company_directory", retrieved_at=page["retrieved_at"], content_sha256=page.get("sha256"),
+                          span=f"Organisasjonsnummer {env.org}; {page.get('name')}", method="directory_page_jsonld",
+                          extra={"robots": "allowed (/bedrift/)"})
+    env.claim("website_and_profiles", "directory_profile", {"platform": "fagfolkguiden", "url": page["url"]}, [ev], confidence=0.97,
+              identity_basis="organisation_number_on_directory_page")
+    if page.get("rating"):
+        r = page["rating"]
+        env.claim("hiring_and_activity", "review_summary", {"rating": r["value"], "scale": 5, "review_count": r["count"],
+                                                            "provider": "Google rating as displayed on Fagfolkguiden"},
+                  [ev], confidence=0.9, note="Third-party aggregate rating displayed on a directory page keyed by this organisation number.")
+
+
+def add_workforce_claims(env: Envelope, result: dict | None, status: dict, has_registry_count: bool) -> None:
+    act = "hiring_and_activity"
+    if result and result.get("status") == "accepted":
+        url = result["url"]
+        period = {"start": f"{result['year']}-01-01", "end": f"{result['year']}-12-31"}
+        ev = env.add_evidence(source_url=url, source_class="official_annual_account_copy", retrieved_at=result["retrieved_at"],
+                              content_sha256=result["sha256"], span=result["span"], method=f"pdf_ocr_{result.get('backend')}",
+                              reporting_period=period, extra={"page": result.get("page"), "content_fingerprint": result.get("fingerprint"),
+                                                             "fingerprint_note": "sha256 of the PDF without its per-download trailer /ID"})
+        label = "full-time equivalents (årsverk)" if result["measure"] == "full_time_equivalents" else "employees"
+        env.claim(act, "workforce", {"value": result["value"], "measure": result["measure"], "label": label, "year": result["year"]},
+                  [ev], key=f"workforce.{result['year']}", confidence=0.95, reporting_period=period,
+                  note="Stated in the official annual accounts filed with Regnskapsregisteret; read with OCR from the filing copy.")
+        return
+    if result is None:
+        reason = status.get("skipped_reason") or "The annual-account copy was not processed within this run's time/request budget."
+        state = "blocked"
+    elif result.get("status") in ("no_statement", "unreadable_pdf"):
+        reason, state = "The filed annual accounts contain no explicit company-level workforce statement that OCR could read.", "not_available"
+    elif result.get("status") == "not_found":
+        reason, state = "No annual-account copy is available for the latest filing year.", "not_available"
+    else:
+        reason, state = f"Annual-account copy could not be processed ({result.get('status')}).", "failed"
+    if not has_registry_count:
+        env.absent(act, "workforce", state, reason)
 
 
 def add_registry_activity(env: Envelope, entity: dict, roles: list[dict] | None, filings) -> None:

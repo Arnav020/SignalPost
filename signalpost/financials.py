@@ -72,7 +72,7 @@ def parse_accounts(body) -> list[dict]:
     return filings
 
 
-def fetch_accounts(http: Http, org: str, reserved: bool = True) -> tuple[list[dict] | None, FetchResult]:
+def fetch_accounts(http: Http, org: str, reserved: bool | str = "accounts") -> tuple[list[dict] | None, FetchResult]:
     res = http.get(ACCOUNTS_API.format(org=org), "official_annual_accounts", accept="application/json", reserved=reserved, timeout=20)
     if res.status in (500, 502, 503, 504, 429) and not res.blocked:
         # one retry on transient source errors (from the same reserved slot pool when possible)
