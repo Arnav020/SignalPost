@@ -1,29 +1,28 @@
 {
-  "run_id": "smoke-v2-run-1",
+  "run_id": "smoke-v3-run-1",
   "agent": "signalpost-agent",
-  "agent_version": "2.0.0",
+  "agent_version": "3.0.0",
   "provisional": false,
-  "started_at": "2026-10-16T19:50:25Z",
-  "completed_at": "2026-10-16T19:54:23Z",
+  "started_at": "2026-10-26T12:42:11Z",
+  "completed_at": "2026-10-26T12:46:28Z",
   "inputs": 100,
   "emitted_envelopes": 100,
   "operations": {
     "max_requests": 2000,
-    "requests": 417,
+    "requests": 396,
     "requests_by_source_class": {
       "official_annual_accounts": 100,
       "official_annual_account_copy": 100,
-      "official_jobs_feed": 86,
+      "official_jobs_feed": 79,
       "open_data_wikidata": 1,
-      "company_website_robots": 53,
+      "company_website_robots": 52,
       "directory_sitemap": 6,
       "directory_page": 1,
-      "company_website": 55,
-      "company_website_feed": 3,
-      "company_website_sitemap": 12
+      "company_website": 54,
+      "company_website_feed": 3
     },
-    "bytes": 84306048,
-    "elapsed_s": 237.9,
+    "bytes": 82064125,
+    "elapsed_s": 257.1,
     "third_party_cost_usd": 0.0
   },
   "registry_sources": {
@@ -51,19 +50,19 @@
   },
   "registry_errors": [],
   "claim_states": {
-    "available": 8634,
-    "not_available": 489,
-    "ambiguous": 1,
-    "blocked": 2
+    "available": 8573,
+    "not_available": 492,
+    "ambiguous": 2,
+    "failed": 2
   },
   "website_identity_outcomes": {
-    "unreachable": 48,
-    "parked": 3,
-    "shared_site": 4,
-    "blocked": 2,
-    "ambiguous": 5,
+    "dead_domain": 49,
+    "shared_site": 5,
     "strong": 6,
+    "ambiguous": 5,
     "exact": 3,
+    "unreachable": 2,
+    "parked": 1,
     "conflict": 1
   },
   "companies_with_verified_website": 9,
@@ -91,8 +90,8 @@
       "loaded": true,
       "days": 40,
       "error": null,
-      "ads": 28043,
-      "pages": 85
+      "ads": 26353,
+      "pages": 78
     },
     "nav_confirmed_companies": 0,
     "wikidata_entities": 1,

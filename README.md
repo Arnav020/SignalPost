@@ -96,8 +96,22 @@ where the template prints "1.00") abstain. On random companies the statement is 
   groups, franchises). Published only as `shared_website`; none of its content is attributed to the company.
 * `conflict` / `ambiguous` — a different organisation number is shown, or proof is insufficient: nothing is published.
 
-Social profiles count only when linked from the verified site (or stated on the company's Wikidata item); with several
-profiles on one platform (partner, customer or sister-company links), only a unique best match on the legal name survives.
+### Publication rules (v3, after Builderr's 23 Oct audit)
+
+* **Own site vs parent/group site.** Content from a website is attributed to the company only when the site is its own.
+  The site is treated as a parent/group (or unconfirmed) site — URL published with `site_relation`, nothing else — when it
+  shows several other organisation numbers, is a foreign domain without this organisation number, is group-branded while
+  the legal name is not, lists "our companies", or names neither the company in its title nor in its domain.
+* **Social links.** A profile is kept only when its handle carries the company's own name, brand or domain. Numeric IDs,
+  theme/site-builder/agency handles and sister-company links are dropped; with several candidates on one platform only a
+  unique best match on the legal name survives.
+* **News.** Only real posts: own article URL on the company's domain (not home, index, menu, category, tag or product
+  pages), a real title, and a genuine publication date (JSON-LD `datePublished`, RSS `pubDate`/`published`, or a date
+  printed on the news card). Feed `updated` and sitemap `lastmod` dates are never used. Jobs come from structured
+  `JobPosting` data (current) or NAV ads confirmed by organisation number — careers-page link labels are not postings.
+* **Accounts.** "Latest accounts" is the newest filed period of the company's own accounts (cross-checked against the
+  registry's latest submitted year) with an explicit fiscal-year label. Company (`SELSKAP`) and group (`KONSERN`)
+  accounts are never mixed; growth is computed only between periods of equal length, written older → newer.
 
 ## Envelope
 

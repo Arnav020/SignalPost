@@ -24,8 +24,8 @@ SIGNAL_TYPES = {
     "wikidata_entity": "company_profile", "directory_profile": "company_profile", "employer_self_description": "company_profile",
     "social_profile": "profile_handle", "site_snapshot": "profile_metrics", "website_contact_email": "company_profile",
     "website_contact_phone": "company_profile", "website_address": "place_summary", "news_item": "public_post",
-    "news_page": "public_post", "wikipedia_article": "public_mention", "job_posting": "job_posting",
-    "hiring_status": "job_posting", "careers_page": "job_posting", "recruiting_system_link": "job_posting",
+    "wikipedia_article": "public_mention", "job_posting": "job_posting",
+    "hiring_status": "job_posting", "careers_page": "company_profile", "recruiting_system_link": "company_profile",
     "workforce": "workforce_snapshot", "wikidata_employees": "workforce_snapshot", "review_summary": "review_summary",
     "leader_named_on_website": "company_profile", "shared_website": "company_profile",
 }
@@ -310,6 +310,7 @@ def add_financial_claims(env: Envelope, filings, res, entity: dict) -> None:
         env.absent(sec, "annual_accounts", "not_available", "Regnskapsregisteret returned an empty list.")
         return
     latest_ev = None
+    ev_by_filing = {}
     for filing in filings:
         period = {"start": filing["period_start"], "end": filing["period_end"]}
         ev = env.add_evidence(source_url=ACCOUNTS_API.format(org=org), source_class="official_annual_accounts",
@@ -318,6 +319,7 @@ def add_financial_claims(env: Envelope, filings, res, entity: dict) -> None:
                               method="regnskapsregisteret_json",
                               extra={"filing_copy_url": ACCOUNT_COPY.format(org=org, year=filing["year"])})
         latest_ev = latest_ev or ev
+        ev_by_filing[id(filing)] = ev
         suffix = "" if filing["account_type"] in (None, "SELSKAP") else f".{filing['account_type'].lower()}"
         for field, item in filing["values"].items():
             env.claim(sec, field, item["value"], [ev], key=f"accounts.{filing['year']}{suffix}.{field}", unit=filing["currency"] or "NOK",
@@ -328,8 +330,26 @@ def add_financial_claims(env: Envelope, filings, res, entity: dict) -> None:
                                                    "liquidation_accounts": filing["liquidation_accounts"],
                                                    "filing_copy_url": ACCOUNT_COPY.format(org=org, year=filing["year"])},
                   [ev], key=f"accounts.{filing['year']}{suffix}.filing", reporting_period=period)
-    latest = filings[0]["year"]
-    env.claim(sec, "latest_filed_accounts_year", latest, [latest_ev], reporting_period={"start": filings[0]["period_start"], "end": filings[0]["period_end"]})
+    # Newest filing = the company's own accounts with the latest period end (group accounts are reported separately).
+    own = [f for f in filings if (f["account_type"] or "SELSKAP") == "SELSKAP"] or filings
+    newest = max(own, key=lambda f: f["period_end"])
+    period = {"start": newest["period_start"], "end": newest["period_end"]}
+    latest = newest["period_end"][:4]
+    registry_latest = str(entity.get("latest_submitted_accounts") or "")
+    note = None
+    if registry_latest.isdigit() and registry_latest > latest:
+        note = (f"The registry records accounts submitted for {registry_latest}; Regnskapsregisteret's structured data currently "
+                f"reaches {fiscal_label(period)}.")
+        latest = registry_latest
+    env.claim(sec, "latest_filed_accounts_year", latest, [ev_by_filing.get(id(newest), latest_ev)], reporting_period=period, fiscal_year_label=fiscal_label(period),
+              registry_latest_submitted=registry_latest or None, note=note)
+
+
+def fiscal_label(period: dict) -> str:
+    start, end = period.get("start") or "", period.get("end") or ""
+    if start[5:] == "01-01" and end[5:] == "12-31" and start[:4] == end[:4]:
+        return f"FY{end[:4]}"
+    return f"fiscal period {start} to {end}"
 
 
 # ---------------------------------------------------------------------- web claims
@@ -342,8 +362,9 @@ def _page_evidence(env: Envelope, site, url: str, span: str | None, method: str)
 
 
 WEB_FAIL_REASONS = {
-    "unreachable": "The candidate website did not respond.",
+    "unreachable": "The candidate website did not respond in this run (timeout or connection error).",
     "parked": "The candidate domain is parked or has no content.",
+    "dead_domain": "The candidate domain no longer resolves (no website exists at it).",
     "conflict": "The candidate site shows a different organisation number or redirects to a platform.",
     "ambiguous": "The candidate site could not be tied to this exact organisation.",
     "blocked": "The candidate site blocked automated access (robots.txt or HTTP status) or the budget ran out.",
@@ -382,7 +403,7 @@ def add_web_claims(env: Envelope, candidates, declared_social: list[dict], site,
             elif site.candidate.origin == "name_guess":
                 state, reason = "not_available", "No website is registered; domains derived from the legal name did not prove to belong to this organisation."
             else:
-                state = {"ambiguous": "ambiguous", "conflict": "ambiguous", "blocked": "blocked"}.get(site.identity, "not_available")
+                state = {"ambiguous": "ambiguous", "conflict": "ambiguous", "blocked": "blocked", "unreachable": "failed"}.get(site.identity, "not_available")
                 reason = WEB_FAIL_REASONS.get(site.identity, "The website could not be verified.")
             env.absent(web, "official_website", state, reason,
                        candidates=[{"host": c.host, "origin": c.origin, "exclusive": c.exclusive} for c in candidates][:4], attempts=attempts or None)
@@ -404,24 +425,29 @@ def add_web_claims(env: Envelope, candidates, declared_social: list[dict], site,
                     "nav_employer_homepage": "employer homepage in an official NAV job ad carrying this organisation number",
                     "wikidata_website": "official website (P856) on the Wikidata item carrying this organisation number",
                     "directory_listing": "website listed on a directory page carrying this organisation number"}[site.candidate.origin]
-    env.claim(web, "official_website", home, [ev_home], confidence=conf, identity_level=site.identity, discovered_via=origin_label,
-              identity_proofs=site.proofs or None)
-    if site.identity == "registry_declared":
-        # The registry vouches for the link, but the site does not name this company: publish the URL only.
+    url_only = site.identity == "registry_declared" or getattr(site, "scope", "full") != "full"
+    relation = None
+    if getattr(site, "scope", "full") != "full":
+        relation = "parent_or_group_site" if any(r in ("several_other_organisation_numbers_on_site", "foreign_domain_without_this_organisation_number",
+                                                          "group_branded_site", "site_lists_group_companies") for r in site.scope_reasons) else "site_not_named_for_company"
+    env.claim(web, "official_website", home, [ev_home], confidence=conf if not url_only else min(conf, 0.75), identity_level=site.identity,
+              discovered_via=origin_label, identity_proofs=site.proofs or None, site_relation=relation,
+              scope_reasons=getattr(site, "scope_reasons", None) or None,
+              note="Only the URL is published: the site appears to belong to a parent group or does not name this company, so its "
+                   "profiles, news and jobs are not attributed to this company." if url_only else None)
+    if url_only:
+        why = ("The website appears to be a parent/group site" if relation == "parent_or_group_site"
+               else "The website does not clearly name this company") + "; its content is not attributed to this company."
         if not declared_social:
-            env.absent(web, "social_profile", "ambiguous", "The registry-listed site does not name this company; its profile links are not attributed.")
-        env.absent(act, "job_posting", "ambiguous", "The registry-listed site does not name this company; its content is not attributed.")
-        env.absent(act, "news_item", "ambiguous", "The registry-listed site does not name this company; its content is not attributed.")
+            env.absent(web, "social_profile", "ambiguous", why)
+        env.absent(act, "job_posting", "ambiguous", why)
+        env.absent(act, "news_item", "ambiguous", why)
         return
     env.claim(web, "site_snapshot", {"home_url": home, "pages_captured": x.get("pages_captured"),
                                      "verified_social_links": len(x.get("social_profiles") or []),
                                      "structured_organisation_records": len(x.get("jsonld_organizations") or []),
                                      "interpretation": "Observed site surface of the verified company website; not traffic or popularity."},
               [ev_home], confidence=conf)
-    if x.get("news_page"):
-        ev = _page_evidence(env, site, x["news_page"]["url"], x["news_page"].get("title"), "news_page_fetch")
-        env.claim("hiring_and_activity", "news_page", {"url": x["news_page"]["url"], "title": x["news_page"].get("title")}, [ev],
-                  confidence=conf, note="Company-owned news/activity page on the verified website.")
     if x.get("brand_name"):
         env.claim("legal_identity_and_brand", "public_brand_name", x["brand_name"], [ev_home], confidence=conf)
     if x.get("description"):

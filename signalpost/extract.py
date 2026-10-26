@@ -339,7 +339,7 @@ def parse_feed(xml_text: str) -> list[dict]:
         title = item.find("title")
         link = item.find("link")
         href = (link.get("href") or link.get_text(strip=True)) if link else None
-        date_tag = item.find(["pubdate", "published", "updated", "dc:date"])
+        date_tag = item.find(["pubdate", "published", "dc:date"])  # a feed "updated" date is not a publish date
         date = None
         if date_tag:
             raw = date_tag.get_text(strip=True)

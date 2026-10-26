@@ -212,12 +212,16 @@ def run(args) -> int:
 
     # Phase A3: open data and directory (a handful of requests for the whole batch).
     wikidata: dict[str, dict] = {}
+    wikidata_failed = False
     if not args.no_wikidata:
         try:
             wikidata, wmeta = fetch_wikidata(http, unique)
+            wikidata_failed = bool(wmeta.get("error"))
             log(f"wikidata: {len(wikidata)} entities ({wmeta.get('error') or 'ok'})")
         except Exception as exc:
+            wikidata_failed = True
             log(f"wikidata: failed ({exc})")
+    directory_failed = False
     directory_pages: dict[str, dict] = {}
     if not args.no_directory:
         try:
@@ -225,8 +229,10 @@ def run(args) -> int:
             with ThreadPoolExecutor(max_workers=4) as pool:
                 for org, page in zip(hits, pool.map(lambda o: fetch_directory_page(http, o, hits[o]), hits)):
                     directory_pages[org] = page
+            directory_failed = bool(dmeta.get("error")) or dmeta.get("maps", 0) == 0
             log(f"directory: {len(hits)} pages ({dmeta.get('error') or 'ok'})")
         except Exception as exc:
+            directory_failed = True
             log(f"directory: failed ({exc})")
 
     # Phase B: website discovery + crawl, ordered by expected value.
@@ -356,6 +362,13 @@ def run(args) -> int:
                 add_web_claims(env, cands[org][0], cands[org][1], site, attempts.get(org))
                 add_wikidata_claims(env, wikidata.get(org))
                 add_directory_claims(env, directory_pages.get(org))
+                # A connector that failed this run must not look like a removal on refresh: record it as failed.
+                if wikidata_failed and org not in wikidata:
+                    env.absent("legal_identity_and_brand", "wikidata_entity", "failed", "Wikidata could not be queried in this run.")
+                    env.absent("hiring_and_activity", "wikipedia_article", "failed", "Wikidata could not be queried in this run.")
+                page = directory_pages.get(org)
+                if directory_failed or (page and page.get("status") == "error"):
+                    env.absent("website_and_profiles", "directory_profile", "failed", "The directory could not be read in this run.")
                 add_workforce_claims(env, workforce_results.get(org), workforce_status, bool(entity.get("employees")))
                 add_registry_activity(env, entity, roles.get(org), parsed)
                 env.drop_superseded_absences()

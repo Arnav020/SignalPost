@@ -108,6 +108,70 @@ class FinancialsAndRefresh(unittest.TestCase):
         self.assertEqual([(c["field"], c["previous_value"], c["current_value"]) for c in changes], [("net_result", 10.0, 20.0)])
 
 
+class AuditFixes(unittest.TestCase):
+    """Builderr audit (23 Oct): group sites, footer social links, non-news items, accounts periods."""
+
+    def test_news_must_be_real_dated_posts(self):
+        from signalpost.website import article_like, real_title, valid_publish_date
+        home = "https://firma.no/"
+        self.assertFalse(article_like("https://firma.no/om-oss", home))                     # menu page
+        self.assertFalse(article_like("https://firma.no/nyheter/", home, "https://firma.no/nyheter/"))  # index
+        self.assertFalse(article_like("https://firma.no/nyheter/ukategorisert/", home))    # category label
+        self.assertFalse(article_like("https://firma.no/produkt/skyrc-lapwiz-smart-timer", home))  # product page
+        self.assertTrue(article_like("https://firma.no/nyheter/vi-flytter-til-nye-lokaler", home))
+        self.assertFalse(real_title("SkyRC LapWiz Pris NOK 885,00 inkl. mva. Kjøp"))
+        self.assertTrue(real_title("Vi flytter til nye lokaler i Bergen"))
+        self.assertFalse(valid_publish_date(None))
+        self.assertFalse(valid_publish_date("2999-01-01"))
+
+    def test_feed_updated_is_not_a_publish_date(self):
+        from signalpost.extract import parse_feed
+        xml = "<feed><entry><title>Nytt fra oss i dag</title><link href='https://firma.no/nyheter/nytt-fra-oss-i-dag'/><updated>2026-10-01T10:00:00Z</updated></entry></feed>"
+        self.assertIsNone(parse_feed(xml)[0]["date"])
+
+    def test_social_handles_must_name_the_company(self):
+        site = SiteResult(candidate=Candidate("https://holla-autosenter.no/", "holla-autosenter.no", "registry_website", True, 1),
+                          home_url="https://holla-autosenter.no/")
+        social = {u: {"platform": p, "url": u, "source_url": "x"} for p, u in [
+            ("facebook", "https://www.facebook.com/531887476655112"),      # numeric id: unverifiable
+            ("instagram", "https://www.instagram.com/heksem.mekaniske"),    # other company in the footer
+            ("linkedin", "https://www.linkedin.com/company/holla-autosenter")]}
+        kept = SiteCrawler._own_profiles({"name": "HOLLA AUTOSENTER AS"}, site, social, [], {"site_name": "My Site"})
+        self.assertEqual(list(kept), ["https://www.linkedin.com/company/holla-autosenter"])
+
+    def test_accounts_compare_company_periods_of_same_length(self):
+        from signalpost.synthesis import build_summary
+        body = [
+            {"regnskapsperiode": {"fraDato": "2025-01-01", "tilDato": "2025-12-31"}, "valuta": "NOK", "regnskapstype": "SELSKAP",
+             "resultatregnskapResultat": {"driftsresultat": {"driftsinntekter": {"sumDriftsinntekter": 110.0}}}},
+            {"regnskapsperiode": {"fraDato": "2025-01-01", "tilDato": "2025-12-31"}, "valuta": "NOK", "regnskapstype": "KONSERN",
+             "resultatregnskapResultat": {"driftsresultat": {"driftsinntekter": {"sumDriftsinntekter": 9000.0}}}},
+            {"regnskapsperiode": {"fraDato": "2024-06-01", "tilDato": "2024-12-31"}, "valuta": "NOK", "regnskapstype": "SELSKAP",
+             "resultatregnskapResultat": {"driftsresultat": {"driftsinntekter": {"sumDriftsinntekter": 50.0}}}},
+        ]
+        env = Envelope("123456785", "r", "t")
+        add_financial_claims(env, parse_accounts(body), FinancialsAndRefresh.Res(), {"latest_submitted_accounts": "2025"})
+        text = " ".join(s["text"] for s in build_summary(env, [])["statements"] if s["topic"] == "finances")
+        self.assertIn("Operating revenue in FY2025 was NOK 110", text)   # no growth vs a 7-month period, no group mixing
+        self.assertIn("different length", text)
+        self.assertIn("Group (konsern)", text)
+        latest = next(c for c in env.claims if c["field"] == "latest_filed_accounts_year")
+        self.assertEqual((latest["value"], latest["fiscal_year_label"]), ("2025", "FY2025"))
+
+
+class RefreshFailure(unittest.TestCase):
+    def test_failed_source_carries_forward_instead_of_removal(self):
+        env = Envelope("123456785", "r1", "t")
+        env.claim("legal_identity_and_brand", "wikidata_entity", {"url": "http://www.wikidata.org/entity/Q1"}, [])
+        _, state = apply_refresh(env, None, "t1", True)
+        env2 = Envelope("123456785", "r2", "t")
+        env2.absent("legal_identity_and_brand", "wikidata_entity", "failed", "Wikidata could not be queried in this run.")
+        changes, _ = apply_refresh(env2, state, "t2", True)
+        self.assertEqual(changes, [])
+        carried = [c for c in env2.claims if c["field"] == "wikidata_entity" and c.get("stale")]
+        self.assertEqual(len(carried), 1)
+
+
 class Workforce(unittest.TestCase):
     def test_statements(self):
         from signalpost.workforce import extract_workforce

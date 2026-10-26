@@ -1,7 +1,16 @@
 """Decision-useful profile summary built only from published claims (every sentence cites evidence)."""
 from __future__ import annotations
 
-from .claims import Envelope
+from datetime import date
+
+from .claims import Envelope, fiscal_label
+
+
+def _days(period: dict) -> int:
+    try:
+        return (date.fromisoformat(period["end"]) - date.fromisoformat(period["start"])).days
+    except (KeyError, ValueError):
+        return -1
 
 
 def money(value: float, currency: str = "NOK") -> str:
@@ -47,7 +56,8 @@ def build_summary(env: Envelope, changes: list[dict]) -> dict:
     founded = _first(env, "founded_date")
 
     # What it does --------------------------------------------------------------
-    parts = [f"{name['value']} is a Norwegian {form['value']['label'].lower() if form and form['value'].get('label') else 'entity'}"]
+    display = name["value"] if name else f"Organisation {env.org}"
+    parts = [f"{display} is a Norwegian {form['value']['label'].lower() if form and form['value'].get('label') else 'entity'}"]
     if address and address["value"].get("city"):
         parts.append(f"registered in {address['value'].get('municipality') or address['value']['city']}")
     if industry:
@@ -58,7 +68,7 @@ def build_summary(env: Envelope, changes: list[dict]) -> dict:
     say(sentence, [name, form, industry, address, founded], "identity")
     if status and status["value"] != "active":
         say(f"Registry status: {status['value'].replace('_', ' ')}.", [status], "identity")
-    if brand and brand["value"] and brand["value"].lower() not in name["value"].lower():
+    if brand and brand["value"] and brand["value"].lower() not in display.lower():
         say(f"It presents itself publicly as \"{brand['value']}\".", [brand], "identity")
     if activity:
         say(f"Registered business activity: {activity['value'][:240].rstrip('.')}.", [activity], "what_it_does")
@@ -74,29 +84,52 @@ def build_summary(env: Envelope, changes: list[dict]) -> dict:
         v = filed["value"]
         what = "full-time equivalents (årsverk)" if v["measure"] == "full_time_equivalents" else "employees"
         say(f"Its {v['year']} annual accounts state {v['value']} {what}" + (" — the company reports no staff." if v["value"] == 0 else "."), [filed], "size")
-    revenue = sorted(_available(env, "revenue", "annual_accounts"), key=lambda c: c["reporting_period"]["end"], reverse=True)
-    result = sorted(_available(env, "net_result", "annual_accounts"), key=lambda c: c["reporting_period"]["end"], reverse=True)
-    equity = sorted(_available(env, "equity", "annual_accounts"), key=lambda c: c["reporting_period"]["end"], reverse=True)
-    if revenue:
-        latest = revenue[0]
-        year = latest["reporting_period"]["end"][:4]
-        text = f"In the {year} filed accounts, operating revenue was {money(latest['value'], latest.get('unit') or 'NOK')}"
-        used = [latest]
-        if len(revenue) > 1 and revenue[1]["value"]:
-            prev = revenue[1]
-            change = (latest["value"] - prev["value"]) / abs(prev["value"]) * 100
-            text += f" ({'up' if change >= 0 else 'down'} {abs(change):.0f}% from {money(prev['value'], prev.get('unit') or 'NOK')} in {prev['reporting_period']['end'][:4]})"
-            used.append(prev)
-        if result and result[0]["reporting_period"]["end"][:4] == year:
-            text += f", with a net result of {money(result[0]['value'], result[0].get('unit') or 'NOK')}"
-            used.append(result[0])
-        if equity and equity[0]["reporting_period"]["end"][:4] == year:
-            text += f" and equity of {money(equity[0]['value'], equity[0].get('unit') or 'NOK')}"
-            used.append(equity[0])
+    # Company (SELSKAP) accounts only; group accounts are a different entity scope and are reported separately.
+    def series(field: str, account: str = "SELSKAP") -> list[dict]:
+        items = [c for c in _available(env, field, "annual_accounts") if (c.get("account_type") or "SELSKAP") == account]
+        return sorted(items, key=lambda c: c["reporting_period"]["end"], reverse=True)
+
+    def same_period(c: dict, ref: dict) -> dict | None:
+        return next((x for x in c if x["reporting_period"]["end"] == ref["reporting_period"]["end"]), None)
+
+    revenue, result, equity = series("revenue"), series("net_result"), series("equity")
+    anchor = revenue[0] if revenue else (result[0] if result else None)
+    if anchor:
+        label = fiscal_label(anchor["reporting_period"])
+        unit = anchor.get("unit") or "NOK"
+        used = [anchor]
+        if revenue:
+            latest = revenue[0]
+            # Compare with the previous filing only when it covers a period of the same length, older -> newer.
+            # Only the immediately preceding filing, and only if it covers a period of the same length.
+            before = next((r for r in revenue[1:] if r["reporting_period"]["end"] < latest["reporting_period"]["end"]), None)
+            prev = before if before and abs(_days(before["reporting_period"]) - _days(latest["reporting_period"])) <= 3 else None
+            if prev:
+                direction = "rose" if latest["value"] > prev["value"] else "fell" if latest["value"] < prev["value"] else "was unchanged"
+                text = (f"Operating revenue {direction} from {money(prev['value'], unit)} in {fiscal_label(prev['reporting_period'])} "
+                        f"to {money(latest['value'], unit)} in {label}")
+                if prev["value"] > 0 and latest["value"] > 0:
+                    text += f" ({(latest['value'] - prev['value']) / prev['value'] * 100:+.0f}%)"
+                used.append(prev)
+            else:
+                text = f"Operating revenue in {label} was {money(latest['value'], unit)}"
+                if before:
+                    text += " (the previous filing covers a period of a different length, so no growth rate is computed)"
+        else:
+            text = f"The {label} accounts report no operating revenue line"
+        r, q = same_period(result, anchor), same_period(equity, anchor)
+        if r:
+            text += f"; net result was {money(r['value'], unit)}"
+            used.append(r)
+        if q:
+            text += f" and equity {money(q['value'], unit)}"
+            used.append(q)
         say(text + ".", used, "finances")
-    elif result:
-        latest = result[0]
-        say(f"The {latest['reporting_period']['end'][:4]} accounts report no operating revenue line; net result was {money(latest['value'], latest.get('unit') or 'NOK')}.", [latest], "finances")
+        group = series("revenue", "KONSERN")
+        if group:
+            g = group[0]
+            say(f"Group (konsern) accounts are filed separately: group operating revenue in {fiscal_label(g['reporting_period'])} was "
+                f"{money(g['value'], g.get('unit') or 'NOK')}.", [g], "finances")
     else:
         unknowns.append("Structured annual-account figures were not available from Regnskapsregisteret in this run.")
 

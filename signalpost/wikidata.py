@@ -40,6 +40,12 @@ def fetch_wikidata(http: Http, orgs: list[str], chunk: int = 1500) -> tuple[dict
         values = " ".join(f'"{o}"' for o in orgs[start:start + chunk])
         res = http.post_form(ENDPOINT, "open_data_wikidata", {"query": QUERY % values}, accept="application/sparql-results+json")
         meta["requests"] += 1
+        if res.status in (429, 500, 502, 503, 504) or (res.status == 0 and res.error not in (None, "budget_exhausted")):
+            import time
+
+            time.sleep(8)  # Wikidata rate limiting: one polite retry
+            res = http.post_form(ENDPOINT, "open_data_wikidata", {"query": QUERY % values}, accept="application/sparql-results+json")
+            meta["requests"] += 1
         meta["retrieved_at"] = res.retrieved_at
         if not res.ok:
             meta["error"] = res.error or f"http_{res.status}"

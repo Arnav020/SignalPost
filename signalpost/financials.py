@@ -74,9 +74,13 @@ def parse_accounts(body) -> list[dict]:
 
 def fetch_accounts(http: Http, org: str, reserved: bool | str = "accounts") -> tuple[list[dict] | None, FetchResult]:
     res = http.get(ACCOUNTS_API.format(org=org), "official_annual_accounts", accept="application/json", reserved=reserved, timeout=20)
-    if res.status in (500, 502, 503, 504, 429) and not res.blocked:
-        # one retry on transient source errors (from the same reserved slot pool when possible)
-        retry = http.get(ACCOUNTS_API.format(org=org), "official_annual_accounts", accept="application/json", timeout=20)
+    transient = res.status in (500, 502, 503, 504, 429) or (res.status == 0 and res.error not in (None, "budget_exhausted", "unsafe_or_unresolvable_url"))
+    if transient and not res.blocked:
+        # one retry on transient source/network errors (timeouts included)
+        import time
+
+        time.sleep(3 if res.status == 429 else 1)
+        retry = http.get(ACCOUNTS_API.format(org=org), "official_annual_accounts", accept="application/json", timeout=30)
         if not retry.blocked:
             res = retry
     if res.ok:

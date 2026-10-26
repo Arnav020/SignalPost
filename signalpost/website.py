@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
-from .extract import SOCIAL_RULES, classify_url, extract_page, normalize_social, org_context, parse_date, parse_feed, parse_sitemap, title_from_slug
+from .extract import SOCIAL_RULES, classify_url, extract_page, normalize_social, org_context, parse_date, parse_feed, parse_sitemap
 from .http import FetchResult, Http, is_safe_public_url
 from .registry import FREE_MAIL, Registry, host_key
 
@@ -53,6 +53,8 @@ class SiteResult:
     extracted: dict = field(default_factory=dict)
     home_url: str | None = None
     notes: list[str] = field(default_factory=list)
+    scope: str = "full"  # full = company's own site; url_only = parent/group or unconfirmed site (publish the URL only)
+    scope_reasons: list[str] = field(default_factory=list)
 
 
 def social_from_registry_url(url: str) -> tuple[str, str] | None:
@@ -101,7 +103,85 @@ def build_candidates(org: str, entity: dict, subunits: list[dict], registry: Reg
     return candidates, declared_social
 
 
-NO_GUESS_FORMS = {"BRL", "BBL", "ESEK", "SAM", "KIRK", "PK", "VPFO", "KF", "IKS"}
+FOREIGN_TLDS = {"se", "dk", "fi", "de", "uk", "nl", "fr", "pl", "ee", "lt", "lv", "is", "es", "it", "be", "at", "ch", "us", "ru", "cn"}
+GROUPISH = re.compile(r"\b(group|gruppen|groupe|konsern|konsernet|holding|holdings)\b")
+GROUP_LISTING = re.compile(r"vare selskaper|vare datterselskaper|selskapene i konsernet|selskaper i konsernet|our companies|"
+                           r"our subsidiaries|group companies|companies in the group|vare virksomheter|selskapene vare")
+GENERIC_BRANDS = {"my site", "home", "hjem", "forside", "velkommen", "welcome", "startside", "index", "untitled", "default",
+                  "just another wordpress site", "my wordpress site", "site title", "new site", "hjemmeside"}
+THEME_HANDLES = {"wix", "wordpress", "wordpressdotcom", "envato", "themeforest", "elementor", "squarespace", "godaddy", "onecom",
+                 "domeneshop", "webflow", "shopify", "mailchimp", "hubspot", "jimdo", "weebly", "joomla", "drupal", "facebook",
+                 "instagram", "linkedin", "youtube", "twitter", "sharer", "plugins", "themeisle", "astra", "divi", "elegantthemes",
+                 "visma", "tripletex", "fiken", "uni", "proff", "gulesider", "1881"}
+NAV_SLUGS = {"om-oss", "omoss", "about", "about-us", "kontakt", "kontakt-oss", "contact", "contact-us", "nyheter", "news", "aktuelt",
+             "blogg", "blog", "presse", "press", "artikler", "articles", "arkiv", "archive", "kategori", "category", "tag", "side",
+             "page", "produkter", "products", "tjenester", "services", "shop", "butikk", "nettbutikk", "ansatte", "karriere",
+             "jobb", "jobs", "career", "careers", "personvern", "privacy", "cookies", "vilkar", "terms", "ukategorisert", "uncategorized",
+             "referanser", "prosjekter", "projects", "galleri", "gallery", "faq", "priser", "prices", "medlem", "login", "logg-inn"}
+NON_ARTICLE_PATH = re.compile(r"/(produkt|produkter|product|products|shop|butikk|nettbutikk|kategori|categories|category|tag|tags|merke|"
+                              r"brand|vare|varer|collections|collection|cart|handlekurv|kasse|checkout|author|forfatter|page|side)/", re.I)
+PRICE_TEXT = re.compile(r"\b(kr|nok|pris|kjop|kjøp|inkl\.?\s*mva|eks\.?\s*mva|legg i handlekurv|add to cart|på lager)\b", re.I)
+
+
+def article_like(url: str, home_url: str | None, index_url: str | None = None) -> bool:
+    """A real post has its own URL: not the home page, the news index, a menu page, a product or a category page."""
+    parts = urlsplit(url or "")
+    path = parts.path.rstrip("/")
+    if not path or (url or "").rstrip("/") in {(home_url or "").rstrip("/"), (index_url or "").rstrip("/")}:
+        return False
+    if NON_ARTICLE_PATH.search(path + "/"):
+        return False
+    slug = re.sub(r"\.(html?|php|aspx?)$", "", path.rsplit("/", 1)[-1].lower())
+    if slug in NAV_SLUGS or len(slug) < 8:
+        return False
+    return len(re.split(r"[-_]+", slug)) >= 3 or bool(re.search(r"/20\d\d/|\d{4,}", path))
+
+
+def _domain_is_name_part(host: str, tokens: list[str], entity: dict) -> bool:
+    """Domain = a distinctive part of the legal name (e.g. evotec.no for ENTEC EVOTEC AS, saltofilm.no for SALTO FILM
+    OG FJERNSYN AS). Place names (the company's own municipality/city) are not distinctive: drammen.no does not count."""
+    label = re.sub(r"[^a-z0-9]", "", fold(host.split(".")[0]))
+    variants = {label, label.replace("ae", "a")}
+    places = {re.sub(r"[^a-z0-9]", "", fold(entity.get(k) or "")) for k in ("municipality", "business_city", "postal_city")}
+    toks = [re.sub(r"[^a-z0-9]", "", t) for t in tokens]
+    toks_a = [t.replace("ae", "a") for t in toks]
+    for seq in (toks, toks_a):
+        for t in seq:
+            if len(t) >= 5 and t not in places and t in variants:
+                return True
+        for k in range(2, len(seq) + 1):  # leading tokens joined: "salto"+"film"
+            joined = "".join(seq[:k])
+            if len(joined) >= 6 and joined in variants:
+                return True
+    return False
+
+
+def _today() -> str:
+    from datetime import date as _date
+
+    return _date.today().isoformat()
+
+
+def _months_ago(months: int) -> str:
+    from datetime import date as _date, timedelta
+
+    return (_date.today() - timedelta(days=31 * months)).isoformat()
+
+
+def real_title(title: str | None) -> bool:
+    title = (title or "").strip()
+    return 15 <= len(title) <= 220 and not PRICE_TEXT.search(fold(title)) and fold(title) not in NAV_SLUGS
+
+
+def valid_publish_date(value: str | None) -> bool:
+    if not value or not re.match(r"\d{4}-\d{2}-\d{2}", value):
+        return False
+    from datetime import date as _date
+
+    return "2000-01-01" <= value[:10] <= _date.today().isoformat()
+
+
+NO_GUESS_FORMS ={"BRL", "BBL", "ESEK", "SAM", "KIRK", "PK", "VPFO", "KF", "IKS"}
 NO_GUESS_WORDS = {"borettslag", "sameie", "sameiet", "boligsameie", "holding", "holdings", "invest", "investering", "eiendom",
                   "eiendommer", "eiendomsselskap", "konsult", "konsulent", "kapital", "capital", "partner", "partners"}
 GENERIC_SINGLE = {"bygg", "transport", "service", "data", "consult", "consulting", "media", "design", "eiendom", "invest", "norge",
@@ -210,7 +290,8 @@ class SiteCrawler:
                 site.identity = "blocked"
                 return site
         if home is None:
-            site.identity = "unreachable"
+            # No variant resolved in DNS: the domain does not exist (not available). Otherwise it timed out/errored (failed).
+            site.identity = "dead_domain" if paid_attempts == 0 else "unreachable"
             return site
         site.home_url = res.final_url or candidate.url
         final_host = host_key(site.home_url)
@@ -265,10 +346,8 @@ class SiteCrawler:
                                    "retrieved_at": fres.retrieved_at, "sha256": fres.sha256, "error": fres.error})
                 if fres.ok:
                     feed_items = [dict(item, source_url=rss, retrieved_at=fres.retrieved_at, sha256=fres.sha256) for item in parse_feed(fres.text())]
-        # Sitemap: dated news / job URLs.
-        sitemap_items = []
-        if plenty and used < page_budget and not self.http.budget.past_soft_deadline():
-            sitemap_items = self._sitemap(site, page_budget - used)
+        # Sitemap lastmod dates are not publication dates, so sitemaps are no longer used for news or jobs.
+        sitemap_items: list[dict] = []
         self._evaluate_identity(org, entity, roles, site, pages)
         site.extracted = self._aggregate(org, entity, roles, site, pages, feed_items, sitemap_items)
         return site
@@ -376,6 +455,24 @@ class SiteCrawler:
             site.identity = "ambiguous"
         site.notes.append(f"name_match={name_match};domain_name={domain_name};corroborations={corroborations};others={len(others)}")
 
+        # Content scope: is this the company's OWN site, or a parent/group site that merely lists it?
+        # On a group site only the URL is published; its profiles, news and jobs are not attributed to this company.
+        reasons = []
+        legal = fold(entity.get("name", ""))
+        final_host = host_key(site.home_url or cand.url)
+        if len(others) >= 2:
+            reasons.append("several_other_organisation_numbers_on_site")
+        if final_host.rsplit(".", 1)[-1] in FOREIGN_TLDS and org not in all_orgs:
+            reasons.append("foreign_domain_without_this_organisation_number")
+        if GROUPISH.search(head_text) and not GROUPISH.search(legal):
+            reasons.append("group_branded_site")
+        if GROUP_LISTING.search(body_text[:30000]) and org not in all_orgs:
+            reasons.append("site_lists_group_companies")
+        if org not in all_orgs and not name_in_head and not domain_name and not _domain_is_name_part(cand.host, tokens, entity):
+            reasons.append("company_name_not_in_site_title_or_domain")
+        site.scope = "url_only" if reasons else "full"
+        site.scope_reasons = reasons
+
     @staticmethod
     def _own_profiles(entity: dict, site: SiteResult, social: dict, pages, home: dict) -> dict:
         """Keep only the company's own profiles: partner/customer/press links on a page are not its profiles.
@@ -385,13 +482,17 @@ class SiteCrawler:
         """
         keys = set(name_tokens(entity.get("name", "")))
         for text in (home.get("site_name"), home.get("og_title")):
-            keys.update(t for t in name_tokens(text or "") if len(t) >= 3)
+            if fold(text or "").strip() not in GENERIC_BRANDS:
+                keys.update(t for t in name_tokens(text or "") if len(t) >= 3)
+        keys -= THEME_HANDLES
         label = re.sub(r"[^a-z0-9]", "", fold(site.candidate.host.split(".")[0]))
         compact_name = "".join(name_tokens(entity.get("name", "")))
 
         def matches(url: str) -> bool:
-            handle = re.sub(r"[^a-z0-9]", "", fold(url.rstrip("/").rsplit("/", 1)[-1].lstrip("@")))
-            if not handle:
+            # Every kept profile must carry the company's own name/brand/domain in its handle: footer links to a parent
+            # group, the web agency or the site theme do not, and numeric IDs cannot be verified.
+            handle = re.sub(r"[^a-z0-9]", "", fold(url.split("?")[0].rstrip("/").rsplit("/", 1)[-1].lstrip("@")))
+            if not handle or handle.isdigit() or handle in THEME_HANDLES or any(t in handle for t in ("theme", "template", "webdesign", "webbyra", "digitalbyra")):
                 return False
             if label and len(label) >= 4 and (label in handle or handle in label and len(handle) >= 4):
                 return True
@@ -400,10 +501,6 @@ class SiteCrawler:
             return any(len(k) >= 4 and k in handle for k in keys)
 
         legal_tokens = [t for t in name_tokens(entity.get("name", "")) if len(t) >= 3]
-
-        def opaque(url: str) -> bool:
-            tail = url.rstrip("/").rsplit("/", 1)[-1]
-            return bool(re.fullmatch(r"(profile\.php\?id=)?\d{6,}|UC[\w-]{20,}", tail))
 
         def token_score(url: str) -> int:
             handle = re.sub(r"[^a-z0-9]", "", fold(url.rstrip("/").rsplit("/", 1)[-1]))
@@ -415,8 +512,6 @@ class SiteCrawler:
         kept = {}
         for platform, items in by_platform.items():
             good = [i for i in items if matches(i["url"])]
-            if not good and len(items) == 1 and opaque(items[0]["url"]):
-                good = items  # a single numeric/ID-style profile (e.g. facebook ID, YouTube channel) cannot be name-matched
             if len(good) > 1:
                 # Group/brand sites link sister companies: keep only a unique best match on the legal name.
                 scores = sorted(((token_score(i["url"]), i) for i in good), key=lambda s: -s[0])
@@ -445,7 +540,11 @@ class SiteCrawler:
                 phones.setdefault(p, url)
             jsonld_orgs.extend(dict(o, source_url=url) for o in page["jsonld_orgs"])
             for job in page["job_postings"]:
-                jobs.append(dict(job, source_url=url, method="jsonld_jobposting"))
+                # Structured JobPosting only, with a title and a current posting/validity date.
+                fresh = valid_publish_date((job.get("date_posted") or "")[:10]) and (job.get("date_posted") or "")[:10] >= _months_ago(12)
+                open_ = (job.get("valid_through") or "")[:10] >= _today()
+                if job.get("title") and (fresh or open_):
+                    jobs.append(dict(job, source_url=url, method="jsonld_jobposting"))
             for art in page["articles"]:
                 news.append(dict(art, source_url=url, method="jsonld_article"))
             for link in page["ats_links"]:
@@ -454,23 +553,23 @@ class SiteCrawler:
             record = next((p for p in site.pages if p["requested_url"] == url), None)
             kind = record["kind"] if record else None
             if kind == "careers":
-                careers_url = url
-                for link in page["internal_links"]:
-                    if classify_url(link["url"]) == "job" and link["url"].rstrip("/") != url.rstrip("/"):
-                        label = link["label"] if 6 <= len(link["label"]) <= 140 else title_from_slug(link["url"])
-                        jobs.append({"title": label, "url": link["url"], "source_url": url, "method": "careers_page_link", "date_posted": None})
+                careers_url = url  # the careers page itself; link labels on it are not treated as job postings
             if kind == "news":
                 news_page = {"url": url, "title": page.get("title")}
                 for link in page["internal_links"]:
-                    if classify_url(link["url"]) == "news" and link["url"].rstrip("/") != url.rstrip("/") and 12 <= len(link["label"]) <= 200:
-                        date = parse_date(link["label"])
-                        news.append({"title": link["label"], "url": link["url"], "date": date, "source_url": url, "method": "news_page_link"})
+                    # Only cards that carry their own publish date in the link text; menu labels have none.
+                    date = parse_date(link["label"])
+                    if date and classify_url(link["url"]) == "news":
+                        title = re.sub(r"\s*\b\d{1,2}\.\s*\w+\s+20\d\d\b|\b\d{1,2}\.\d{1,2}\.20\d\d\b|\b20\d\d-\d{2}-\d{2}\b", " ", link["label"]).strip(" -|·,")
+                        news.append({"title": title, "url": link["url"], "date": date, "source_url": url, "method": "news_page_dated_link"})
         for item in feed_items:
             news.append({"title": item["title"], "url": item["url"], "date": item.get("date"), "source_url": item["source_url"], "method": "rss_feed"})
-        for item in sitemap_items:
-            target = jobs if item["kind"] == "job" else news
-            target.append({"title": title_from_slug(item["url"]), "url": item["url"], "date": item.get("lastmod"),
-                           "source_url": item["source_url"], "method": "sitemap_lastmod", "date_kind": "last_modified"})
+        # Keep only real, dated, company-owned posts with their own article URL.
+        own = host_key(site.home_url)
+        index_url = (news_page or {}).get("url")
+        news = [n for n in news
+                if valid_publish_date(n.get("date")) and real_title(n.get("title")) and article_like(n.get("url"), site.home_url, index_url)
+                and host_key(n.get("url") or "") == own]
         # Dedupe and keep the most recent first.
         def dedupe(items):
             out, seen = [], set()
@@ -496,6 +595,8 @@ class SiteCrawler:
                 leaders_on_site.append({"name": name, "role": role.get("role")})
         description = home.get("description") or next((o.get("description") for o in jsonld_orgs if o.get("description")), None)
         brand = home.get("site_name") or next((o.get("name") for o in jsonld_orgs if o.get("name")), None)
+        if brand and fold(brand).strip() in GENERIC_BRANDS:
+            brand = None  # site-builder default such as "My Site"
         return {
             "home_url": site.home_url,
             "title": home.get("title"),
