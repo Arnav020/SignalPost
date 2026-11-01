@@ -1,17 +1,17 @@
-[18:12:11] signalpost-agent 3.0.0: 100 inputs (100 unique valid), budget 2000 requests / 45.0 min
-[18:12:33] [registry] entities: run_cache parsed in 22s
-[18:12:43] [registry] subunits: run_cache parsed in 10s
-[18:12:55] [registry] roles: run_cache parsed in 12s
-[18:12:55] workforce: started for 100 filings (reserved 100 requests; OCR capacity ~506 with 12 workers)
-[18:12:55] accounts: fetching 100 companies
-[18:12:58] accounts: done (102 requests used)
-[18:14:00] nav: 78 feed pages, 26353 ads, 8558 active
-[18:14:00] nav: 0 candidate ads checked, 0 confirmed for 0 companies
-[18:14:02] wikidata: 1 entities (ok)
-[18:14:18] directory: 1 pages (ok)
-[18:14:18] web: 18 companies with website candidates; 1712 requests left
-[18:14:25] web[registry]: 18 companies; verified so far 5; 272 requests used, 133s
-[18:14:54] web[name-guess]: 57 companies; verified so far 9; 353 requests used, 163s
-[18:16:27] workforce: 95 statements from 100 filings (100 processed, backend rapidocr, 12 workers, 212.5s)
-[18:16:29] done: 100 envelopes, 396 requests, 257.1s -> smoke-test
-[18:16:29] total wall time 257s
+[16:52:37] signalpost-agent 4.0.0: 100 inputs (100 unique valid), budget 1800 requests (1800 per 100 companies) / 45.0 min
+[16:58:13] [registry] entities: downloaded parsed in 336s
+[16:58:13] [registry] subunits: using the live API per company
+[16:58:13] [registry] roles: using the live API per company
+[16:58:19] workforce: started for 100 filings (reserved 100 requests; OCR capacity ~434 with 12 workers)
+[16:58:19] accounts: fetching 100 companies
+[16:58:22] accounts: done (303 requests used)
+[16:59:18] nav: 78 feed pages, 26172 ads, 8532 active
+[16:59:18] nav: 1 candidate ads checked, 1 confirmed for 1 companies
+[16:59:22] wikidata: 1 entities (ok)
+[16:59:40] directory: 1 pages (ok)
+[16:59:40] web: 18 companies with website candidates; 1310 requests left
+[16:59:49] web[registry]: 18 companies; verified so far 6; 478 requests used, 432s
+[17:00:18] web[name-guess]: 57 companies; verified so far 10; 571 requests used, 461s
+[17:07:17] workforce: 95 statements from 100 filings (100 processed, backend rapidocr, 12 workers, 538.4s)
+[17:07:18] done: 100 envelopes, 625 requests, 880.7s -> smoke-test
+[17:07:18] total wall time 881s

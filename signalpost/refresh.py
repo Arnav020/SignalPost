@@ -30,6 +30,32 @@ WEB_FIELDS = {"job_posting", "news_item", "social_profile", "website_contact_ema
               "official_website", "website_founding_date", "website_employee_statement"}
 
 
+ROLE_FIELDS = {"ceo", "board_chair", "board_deputy_chair", "board_member", "board_deputy_member", "auditor", "accountant",
+               "owner", "contact_person", "general_partner", "business_manager", "joint_owner", "role"}
+
+
+def source_group(claim: dict) -> str | None:
+    """Which upstream source produced this claim (used to tell a failed refresh from a real removal)."""
+    field, key = claim.get("field"), claim.get("key") or ""
+    if field in ROLE_FIELDS or (field == "registry_event" and "role_group_changed" in key):
+        return "roles"
+    if field == "registered_workplace":
+        return "subunits"
+    if claim.get("section") == "annual_accounts" or (field == "registry_event" and "annual_accounts_period_end" in key):
+        return "accounts"
+    if field in ("wikidata_entity", "wikipedia_article", "wikidata_employees"):
+        return "wikidata"
+    if field in ("directory_profile", "review_summary"):
+        return "directory"
+    if field == "workforce" and key != "workforce.registry":
+        return "workforce"
+    if key.startswith("job.nav.") or field in ("hiring_status", "employer_self_description"):
+        return "nav"
+    if field in WEB_FIELDS or field in ("site_snapshot", "shared_website", "careers_page", "recruiting_system_link"):
+        return "website"
+    return None
+
+
 def value_hash(value) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:16]
 
@@ -106,7 +132,8 @@ def apply_refresh(env, previous: dict | None, now: str, web_checked: bool) -> tu
             continue
         claim = old["claim"]
         states = field_states.get((claim["section"], claim["field"]), set())
-        refresh_failed = bool(states & {"failed", "blocked"}) or (claim["field"] in WEB_FIELDS and not web_checked)
+        refresh_failed = (bool(states & {"failed", "blocked"}) or (claim["field"] in WEB_FIELDS and not web_checked)
+                          or source_group(claim) in getattr(env, "failed_sources", set()))
         for e in old.get("evidence", []):
             env.evidence.setdefault(e["id"], dict(e, superseded=not refresh_failed))
         if refresh_failed:

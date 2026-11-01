@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from urllib.parse import urlsplit
 import json
 
 from .financials import ACCOUNT_COPY, ACCOUNTS_API
@@ -78,6 +79,7 @@ class Envelope:
         self.errors: list[dict] = []
         self.section_notes: dict[str, list[str]] = {key: [] for key, _ in SECTIONS}
         self.requests = 0
+        self.failed_sources: set[str] = set()
 
     # evidence -------------------------------------------------------------------
     def add_evidence(self, *, source_url: str, source_class: str, retrieved_at: str, content_sha256: str | None,
@@ -241,6 +243,7 @@ def add_registry_claims(env: Envelope, entity: dict, registry_meta: dict, live: 
 def add_role_claims(env: Envelope, roles: list[dict], meta: dict, live: bool = False) -> None:
     sec = "leadership_and_workplaces"
     if roles is None:
+        env.failed_sources.add("roles")
         env.absent(sec, "roles", "failed", "Official roles could not be retrieved in this run.")
         return
     ev = env.add_evidence(source_url=ROLES_API.format(org=env.org), source_class="official_registry",
@@ -267,6 +270,7 @@ def add_role_claims(env: Envelope, roles: list[dict], meta: dict, live: bool = F
 def add_subunit_claims(env: Envelope, subunits: list[dict] | None, meta: dict, live: bool = False) -> None:
     sec = "leadership_and_workplaces"
     if subunits is None:
+        env.failed_sources.add("subunits")
         env.absent(sec, "registered_workplace", "failed", "Registered workplaces could not be retrieved in this run.")
         return
     ev = env.add_evidence(source_url=SUBUNITS_API.format(org=env.org), source_class="official_registry",
@@ -298,8 +302,10 @@ def add_financial_claims(env: Envelope, filings, res, entity: dict) -> None:
                        [env.add_evidence(source_url=ACCOUNTS_API.format(org=org), source_class="official_annual_accounts",
                                          retrieved_at=res.retrieved_at, content_sha256=None, method="http_status", span="HTTP 404")])
         elif res is not None and res.blocked:
+            env.failed_sources.add("accounts")
             env.absent(sec, "annual_accounts", "blocked", "Request budget exhausted before the accounts call.")
         else:
+            env.failed_sources.add("accounts")
             env.absent(sec, "annual_accounts", "failed", f"Accounts request failed ({getattr(res, 'error', None) or getattr(res, 'status', None)}).")
         if entity.get("latest_submitted_accounts"):
             ev = env.add_evidence(source_url=ENTITY_API.format(org=org), source_class="official_registry", retrieved_at=env.started_at,
@@ -425,24 +431,38 @@ def add_web_claims(env: Envelope, candidates, declared_social: list[dict], site,
                     "nav_employer_homepage": "employer homepage in an official NAV job ad carrying this organisation number",
                     "wikidata_website": "official website (P856) on the Wikidata item carrying this organisation number",
                     "directory_listing": "website listed on a directory page carrying this organisation number"}[site.candidate.origin]
-    url_only = site.identity == "registry_declared" or getattr(site, "scope", "full") != "full"
-    relation = None
+    scope_reasons = getattr(site, "scope_reasons", None) or []
     if getattr(site, "scope", "full") != "full":
-        relation = "parent_or_group_site" if any(r in ("several_other_organisation_numbers_on_site", "foreign_domain_without_this_organisation_number",
-                                                          "group_branded_site", "site_lists_group_companies") for r in site.scope_reasons) else "site_not_named_for_company"
-    env.claim(web, "official_website", home, [ev_home], confidence=conf if not url_only else min(conf, 0.75), identity_level=site.identity,
-              discovered_via=origin_label, identity_proofs=site.proofs or None, site_relation=relation,
-              scope_reasons=getattr(site, "scope_reasons", None) or None,
-              note="Only the URL is published: the site appears to belong to a parent group or does not name this company, so its "
-                   "profiles, news and jobs are not attributed to this company." if url_only else None)
-    if url_only:
-        why = ("The website appears to be a parent/group site" if relation == "parent_or_group_site"
-               else "The website does not clearly name this company") + "; its content is not attributed to this company."
+        # Possibly a parent-group or sister-company site: leave the website blank and say why in one line.
+        host = urlsplit(home).hostname or home
+        lines = {
+            "several_other_organisation_numbers_on_site": f"{host} lists several other organisation numbers, so it is likely a group site, not this company's own.",
+            "foreign_domain_without_this_organisation_number": f"{host} is a foreign domain that does not show this organisation number, so it is likely a parent-group site.",
+            "group_branded_site": f"{host} is branded as a group while this company is not, so it is likely the parent's site.",
+            "site_lists_group_companies": f"{host} presents several group companies, so it is not clearly this company's own site.",
+            "partial_name_domain_possible_sister_company": f"{host} matches only part of the company name and the site never names this company, so it could belong to a sister company.",
+            "company_name_not_in_site_title_or_domain": f"{host} does not name this company in its title or domain, so it is not attributed to this company.",
+        }
+        reason = next((lines[r] for r in scope_reasons if r in lines), f"{host} could not be confirmed as this company's own site.")
+        env.absent(web, "official_website", "ambiguous", reason, [ev_home], candidate_url=home, scope_reasons=scope_reasons,
+                   discovered_via=origin_label, confidence_note="withheld: not certain this is the company's own site")
+        if not declared_social:
+            env.absent(web, "social_profile", "ambiguous", "Profiles linked from that site are not attributed: " + reason)
+        env.absent(act, "job_posting", "ambiguous", "Jobs on that site are not attributed: " + reason)
+        env.absent(act, "news_item", "ambiguous", "News on that site is not attributed: " + reason)
+        return
+    if site.identity == "registry_declared":
+        env.claim(web, "official_website", home, [ev_home], confidence=0.75, identity_level=site.identity, discovered_via=origin_label,
+                  identity_proofs=site.proofs or None,
+                  note="Listed for this organisation in the official registry; the site itself does not name the company, so only the URL is published.")
+        why = "The registry-listed site does not name this company; its content is not attributed."
         if not declared_social:
             env.absent(web, "social_profile", "ambiguous", why)
         env.absent(act, "job_posting", "ambiguous", why)
         env.absent(act, "news_item", "ambiguous", why)
         return
+    env.claim(web, "official_website", home, [ev_home], confidence=conf, identity_level=site.identity, discovered_via=origin_label,
+              identity_proofs=site.proofs or None)
     env.claim(web, "site_snapshot", {"home_url": home, "pages_captured": x.get("pages_captured"),
                                      "verified_social_links": len(x.get("social_profiles") or []),
                                      "structured_organisation_records": len(x.get("jsonld_organizations") or []),
@@ -512,6 +532,7 @@ def add_nav_claims(env: Envelope, ads: list[dict] | None, nav_status: dict) -> N
                                   method="nav_feed_scan")
             env.absent(act, "job_posting", "not_available", f"No active NAV job ad for this organisation in the last {nav_status.get('days')} days of the official feed.", [ev])
         else:
+            env.failed_sources.add("nav")
             env.absent(act, "job_posting", "blocked" if nav_status.get("error", "").startswith("stopped") else "failed",
                        f"NAV job feed unavailable in this run ({nav_status.get('error')}).")
         return
@@ -592,6 +613,8 @@ def add_workforce_claims(env: Envelope, result: dict | None, status: dict, has_r
         reason, state = "No annual-account copy is available for the latest filing year.", "not_available"
     else:
         reason, state = f"Annual-account copy could not be processed ({result.get('status')}).", "failed"
+    if state in ("blocked", "failed"):
+        env.failed_sources.add("workforce")
     if not has_registry_count:
         env.absent(act, "workforce", state, reason)
 

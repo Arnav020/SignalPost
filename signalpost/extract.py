@@ -324,6 +324,31 @@ def extract_page(html: str, base_url: str) -> dict:
                     "url": _text_value(obj.get("url")) or base_url,
                 })
 
+    # Publication metadata of this page (used to verify that a news item is a real, dated article).
+    # Only genuine publication markers; a generic "date" meta or a page-wide <time> is often the render date.
+    published = meta("article:published_time", "og:published_time", "datePublished")
+    if not published:
+        tag = soup.find(attrs={"itemprop": "datePublished"})
+        published = (tag.get("content") or tag.get("datetime")) if tag else None
+    if not published:
+        art = soup.find("article")
+        tag = art.find("time", attrs={"datetime": True}) if art else None
+        published = tag["datetime"] if tag else None
+    article_dates = [a["date"] for a in page["articles"] if a.get("url", "").rstrip("/") == base_url.rstrip("/")]
+    page["published_date"] = (article_dates[0] if article_dates else (published or "")[:10]) or None
+    page["og_type"] = (meta("og:type") or "").lower() or None
+    page["is_product"] = page["og_type"] == "product" or any(
+        t in {"Product", "Offer", "AggregateOffer", "ProductGroup"} for obj in jsonld for t in _types(obj))
+    # Main content only (article/main element, else body without header/nav/footer): a footer "© Firma AS" must not
+    # count as the article naming the company.
+    main = soup.find("article") or soup.find("main") or soup.find(attrs={"role": "main"})
+    if main is None:
+        for tag in soup(["header", "nav", "footer", "aside"]):
+            tag.decompose()
+        main = soup.body or soup
+    page["main_text"] = re.sub(r"\s+", " ", main.get_text(" ", strip=True))[:20000]
+    h1 = soup.find("h1")
+    page["h1"] = h1.get_text(" ", strip=True)[:200] if h1 else None
     page["social"] = {k: sorted(v) for k, v in page["social"].items()}
     page["emails"] = sorted(page["emails"])
     page["phones"] = sorted(page["phones"])

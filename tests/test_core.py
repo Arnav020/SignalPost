@@ -159,6 +159,27 @@ class AuditFixes(unittest.TestCase):
         self.assertEqual((latest["value"], latest["fiscal_year_label"]), ("2025", "FY2025"))
 
 
+class SecondAudit(unittest.TestCase):
+    """Builderr feedback (1 Nov): sister-company sites, articles must name the company, jobs must name the company."""
+
+    def test_article_must_name_company(self):
+        from signalpost.website import company_name_matcher
+        names = company_name_matcher({"name": "NILSSON HARAS AS", "municipality": "OSLO"}, None)
+        self.assertTrue(names("Nilsson Haras vant Derby"))
+        self.assertFalse(names("Nilsson Bil lanserer ny modell"))   # sister company / other Nilsson
+        self.assertFalse(names(""))
+
+    def test_main_text_excludes_footer(self):
+        page = extract_page("<html><body><header>Firma AS</header><main><h1>Sommerfest</h1><p>Vi inviterer.</p></main>"
+                            "<footer>(c) Firma AS</footer></body></html>", "https://firma.no/nyheter/sommerfest-for-alle")
+        self.assertNotIn("Firma AS", page["main_text"])
+
+    def test_partial_name_domain_needs_full_name_on_site(self):
+        from signalpost.website import _domain_is_name_part, name_tokens
+        # The domain matches part of the name; scope also requires the full name on the site (checked in the gate).
+        self.assertTrue(_domain_is_name_part("nilsson.no", name_tokens("NILSSON HARAS AS"), {"municipality": "OSLO"}))
+
+
 class RefreshFailure(unittest.TestCase):
     def test_failed_source_carries_forward_instead_of_removal(self):
         env = Envelope("123456785", "r1", "t")
@@ -170,6 +191,21 @@ class RefreshFailure(unittest.TestCase):
         self.assertEqual(changes, [])
         carried = [c for c in env2.claims if c["field"] == "wikidata_entity" and c.get("stale")]
         self.assertEqual(len(carried), 1)
+
+
+class RefreshSourceFailure(unittest.TestCase):
+    def test_roles_source_failure_is_not_a_removal(self):
+        from signalpost.claims import add_role_claims
+        env = Envelope("123456785", "r1", "t")
+        add_role_claims(env, [{"name": "Kari Nordmann", "person": True, "deceased": False, "organisation_number": None,
+                               "role_code": "LEDE", "role": "Styrets leder", "group": "Styre", "group_last_changed": "2024-01-01",
+                               "inactive": False}], {})
+        _, state = apply_refresh(env, None, "t1", True)
+        env2 = Envelope("123456785", "r2", "t")
+        add_role_claims(env2, None, {})          # roles endpoint failed this run
+        changes, _ = apply_refresh(env2, state, "t2", True)
+        self.assertEqual(changes, [])
+        self.assertTrue(any(c["field"] == "board_chair" and c.get("stale") for c in env2.claims))
 
 
 class Workforce(unittest.TestCase):

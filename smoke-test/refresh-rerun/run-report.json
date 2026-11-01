@@ -1,28 +1,30 @@
 {
-  "run_id": "smoke-v3-run-2",
+  "run_id": "smoke-v4-fresh-2",
   "agent": "signalpost-agent",
-  "agent_version": "3.0.0",
+  "agent_version": "4.0.0",
   "provisional": false,
-  "started_at": "2026-10-26T12:46:30Z",
-  "completed_at": "2026-10-26T12:50:51Z",
+  "started_at": "2026-11-01T11:37:19Z",
+  "completed_at": "2026-11-01T11:41:12Z",
   "inputs": 100,
   "emitted_envelopes": 100,
   "operations": {
-    "max_requests": 2000,
-    "requests": 397,
+    "max_requests": 1800,
+    "requests": 617,
     "requests_by_source_class": {
+      "official_roles_live": 100,
+      "official_subunits_live": 100,
       "official_annual_accounts": 100,
       "official_annual_account_copy": 100,
-      "official_jobs_feed": 79,
+      "official_jobs_feed": 80,
       "open_data_wikidata": 1,
       "company_website_robots": 52,
       "directory_sitemap": 6,
       "directory_page": 1,
-      "company_website": 55,
-      "company_website_feed": 3
+      "company_website": 73,
+      "company_website_feed": 4
     },
-    "bytes": 82074101,
-    "elapsed_s": 261.2,
+    "bytes": 83122438,
+    "elapsed_s": 234.0,
     "third_party_cost_usd": 0.0
   },
   "registry_sources": {
@@ -30,39 +32,34 @@
       "url": "https://data.brreg.no/enhetsregisteret/api/enheter/lastned/csv",
       "path": ".cache\\enheter.csv.gz",
       "origin": "run_cache",
-      "retrieved_at": "2026-10-15T20:28:58Z",
-      "sha256": "cfd5738e1c0bf808dae004fffd9dfe9a549467b0d5038c872f6df91b828d3041"
+      "retrieved_at": "2026-11-01T11:28:02Z",
+      "sha256": "4d1c45c02d8fbc7eb5b07bb3317b8f736aa38c25b6bb60e2923c1bbe934ce14e"
     },
     "subunits": {
       "url": "https://data.brreg.no/enhetsregisteret/api/underenheter/lastned/csv",
-      "path": ".cache\\underenheter.csv.gz",
-      "origin": "run_cache",
-      "retrieved_at": "2026-10-15T20:26:02Z",
-      "sha256": "f71a8a12b3570ca51f94be01e7b3d8cad92f3b139621d8fe4660ebb07fa23f56"
+      "origin": "live_api_per_company",
+      "error": "bulk_not_downloaded_by_design"
     },
     "roles": {
       "url": "https://data.brreg.no/enhetsregisteret/api/roller/totalbestand",
-      "path": ".cache\\roller.json.gz",
-      "origin": "run_cache",
-      "retrieved_at": "2026-10-15T20:23:25Z",
-      "sha256": "dd706c82c4e080dd3548cd5a913d3a35e66da042249126aa506ee0f6b9e02f78"
+      "origin": "live_api_per_company",
+      "error": "bulk_not_downloaded_by_design"
     }
   },
   "registry_errors": [],
   "claim_states": {
-    "available": 8573,
+    "available": 8575,
     "not_available": 492,
     "ambiguous": 2,
     "failed": 2
   },
   "website_identity_outcomes": {
-    "dead_domain": 49,
-    "shared_site": 5,
-    "ambiguous": 5,
-    "strong": 6,
-    "exact": 3,
+    "dead_domain": 50,
     "unreachable": 2,
-    "parked": 1,
+    "shared_site": 5,
+    "exact": 2,
+    "strong": 7,
+    "ambiguous": 5,
     "conflict": 1
   },
   "companies_with_verified_website": 9,
@@ -76,6 +73,28 @@
     "third_party_paid_apis": null,
     "cost_usd": 0.0
   },
+  "request_budget": {
+    "requests_total": 617,
+    "companies": 100,
+    "requests_per_company": 6.17,
+    "requests_per_100_companies": 617.0,
+    "published_limit_per_100_companies": 2000,
+    "share_of_limit": 0.308,
+    "cap_used_for_this_run": 1800,
+    "by_source_class": {
+      "official_roles_live": 100,
+      "official_subunits_live": 100,
+      "official_annual_accounts": 100,
+      "official_annual_account_copy": 100,
+      "official_jobs_feed": 80,
+      "open_data_wikidata": 1,
+      "company_website_robots": 52,
+      "directory_sitemap": 6,
+      "directory_page": 1,
+      "company_website": 73,
+      "company_website_feed": 4
+    }
+  },
   "connectors": {
     "workforce_annual_accounts_ocr": {
       "backend": "rapidocr",
@@ -83,17 +102,17 @@
       "downloaded": 100,
       "accepted": 95,
       "skipped_reason": null,
-      "elapsed_s": 212.2,
+      "elapsed_s": 213.2,
       "processed": 100
     },
     "nav_job_feed": {
       "loaded": true,
       "days": 40,
       "error": null,
-      "ads": 26357,
+      "ads": 26171,
       "pages": 78
     },
-    "nav_confirmed_companies": 0,
+    "nav_confirmed_companies": 1,
     "wikidata_entities": 1,
     "directory_pages": 1
   }

@@ -84,6 +84,8 @@ def compact(envelope: dict) -> dict:
             "v": _fmt(c.get("value")), "u": (c["value"].get("url") if isinstance(c.get("value"), dict) else (c["value"] if isinstance(c.get("value"), str) and c["value"].startswith("http") else None)),
             "a": c["availability"], "d": c.get("effective_date"), "r": c.get("reason"), "st": c.get("stale"), "src": src,
             "id": c.get("identity_level"),
+            "cf": c.get("confidence") if c["availability"] == "available" else None,
+            "cu": c.get("candidate_url"),
         })
     reg = next((c for c in envelope.get("claims", []) if c["field"] == "business_address" and c["availability"] == "available"), None)
     ind = next((c for c in envelope.get("claims", []) if c["field"] == "industry" and c["availability"] == "available"), None)
@@ -172,7 +174,7 @@ function show(o){const c=D.find(x=>x.o===o);cur=o;document.body.classList.add('s
  if(years.length){h+=`<h3>Annual accounts (NOK)</h3><table><tr><th>Item</th>${years.map(y=>`<th>${y}</th>`).join('')}</tr>${Object.entries(c.fin).map(([k,v])=>`<tr><td>${esc(k.replace(/_/g,' '))}</td>${years.map(y=>`<td>${v[y]?`<a href="${esc(v[y].src[0]?.u)}" target="_blank" rel="noopener" title="Regnskapsregisteret">${money(v[y].v)}</a>`:'<span class=muted>–</span>'}</td>`).join('')}</tr>`).join('')}</table><p class="src">Source: official annual accounts, Regnskapsregisteret · filing copies: ${years.map(y=>`<a href="https://data.brreg.no/regnskapsregisteret/regnskap/aarsregnskap/kopi/${c.o}/${y}" target="_blank" rel="noopener">${y} PDF</a>`).join(' · ')}</p>`}
  for(const [s,l] of SECS){const fs=c.facts.filter(f=>f.s===s);if(!fs.length)continue;h+=`<h3>${l}</h3>`;
   for(const f of fs){const val=f.a==='available'?(f.u?`<a href="${esc(f.u)}" target="_blank" rel="noopener">${esc(f.v)}</a>`:esc(f.v)):`<span class="state ${f.a}">${f.a}</span> <span class="muted">${esc(f.r||'')}</span>`;
-   h+=`<div class="fact"><div class="l">${esc(f.l)}${f.d?`<br><span class="src">${esc(f.d)}</span>`:''}</div><div>${val}${f.st?' <span class="state blocked">not re-confirmed</span>':''}${f.id?` <span class="chip">identity: ${esc(f.id)}</span>`:''}<div class="src">${srcs(f)}</div></div></div>`}}
+   h+=`<div class="fact"><div class="l">${esc(f.l)}${f.d?`<br><span class="src">${esc(f.d)}</span>`:''}</div><div>${val}${f.st?' <span class="state blocked">not re-confirmed</span>':''}${f.cf!=null?` <span class="chip" title="How sure the agent is that this belongs to this company">confidence ${Math.round(f.cf*100)}%</span>`:''}${f.id?` <span class="chip">identity: ${esc(f.id)}</span>`:''}${f.cu?`<div class="src">Candidate withheld: ${esc(f.cu)}</div>`:''}<div class="src">${srcs(f)}</div></div></div>`}}
  if(c.ch.length){h+=`<h3>Changes since previous run</h3>${c.ch.map(x=>`<div class="fact"><div class="l">${esc(x.t)}${x.m?' · material':''}</div><div>${esc(x.pv)} → ${esc(x.cv)}</div></div>`).join('')}`}
  h+=`<h3>Sources</h3><div class="src">${Object.keys(ev).filter(Boolean).map(u=>`<div><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></div>`).join('')}</div>`;
  T.innerHTML=h;T.scrollTop=0}

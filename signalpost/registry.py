@@ -103,6 +103,15 @@ def _fresh(path: Path, max_age_hours: float) -> bool:
     return path.exists() and path.stat().st_size > 1_000_000 and (time.time() - path.stat().st_mtime) < max_age_hours * 3600
 
 
+def _has_supplied(source: Path | None, kind: str) -> bool:
+    if not source or not source.exists():
+        return False
+    if source.is_file():
+        return kind == "entities"
+    key = {"entities": "enhet", "subunits": "underenhet", "roles": "roll"}[kind]
+    return any(key in c.name.lower() and (kind != "entities" or "underenhet" not in c.name.lower()) for c in source.glob("*"))
+
+
 def ensure_bulk(http: Http, cache_dir: Path, kind: str, max_age_hours: float, provided_dir: Path | None) -> tuple[Path | None, dict]:
     url, filename = BULK[kind]
     if provided_dir and provided_dir.is_file():
@@ -120,7 +129,9 @@ def ensure_bulk(http: Http, cache_dir: Path, kind: str, max_age_hours: float, pr
     if _fresh(target, max_age_hours):
         return target, {"url": url, "path": str(target), "origin": "run_cache",
                         "retrieved_at": datetime.fromtimestamp(target.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")}
-    result: FetchResult = http.download(url, target, "official_registry_bulk")
+    # The entity file only adds shared-domain detection on top of the live API, so its download is capped at ~15% of the run.
+    window = max(60.0, min(600.0, (http.budget.soft_deadline - http.budget.started) * 0.15))
+    result: FetchResult = http.download(url, target, "official_registry_bulk", timeout=window)
     if result.error or not target.exists():
         return (target if target.exists() else None), {"url": url, "error": result.error, "origin": "download_failed"}
     return target, {"url": url, "path": str(target), "origin": "downloaded", "retrieved_at": result.retrieved_at}
@@ -253,6 +264,12 @@ def load_registry(http: Http, wanted: Iterable[str], cache_dir: Path, max_age_ho
     for kind, loader in (("entities", load_entities), ("subunits", load_subunits), ("roles", load_roles)):
         started = time.monotonic()
         source = entity_file if (kind == "entities" and entity_file) else provided_dir
+        if kind != "entities" and not _has_supplied(source, kind) and not _fresh(cache_dir / BULK[kind][1], max_age_hours):
+            # Roles and workplaces are cheaper per company from the live API (2 requests/company, well inside the
+            # 20/company limit) than a 60-130 MB download; the bulk file is used only when supplied or already cached.
+            registry.sources[kind] = {"url": BULK[kind][0], "origin": "live_api_per_company", "error": "bulk_not_downloaded_by_design"}
+            log(f"[registry] {kind}: using the live API per company")
+            continue
         path, meta = ensure_bulk(http, cache_dir, kind, max_age_hours, source)
         if path is None:
             registry.errors.append(f"{kind}: {meta.get('error')}")
@@ -322,8 +339,20 @@ def _flat_entity(body: dict) -> dict:
     }
 
 
+def _get_retry(http: Http, url: str, source_class: str, attempts: int = 3) -> FetchResult:
+    """Per-company registry fallback with backoff on throttling (429), 5xx and network errors."""
+    res = http.get(url, source_class, accept="application/json")
+    for attempt in range(1, attempts):
+        transient = res.status in (429, 500, 502, 503, 504) or (res.status == 0 and res.error not in (None, "budget_exhausted", "unsafe_or_unresolvable_url"))
+        if not transient or res.blocked or http.budget.past_soft_deadline():
+            break
+        time.sleep(2.0 * attempt + (3.0 if res.status == 429 else 0.0))
+        res = http.get(url, source_class, accept="application/json")
+    return res
+
+
 def fetch_entity_live(http: Http, org: str) -> tuple[dict | None, FetchResult]:
-    res = http.get(ENTITY_API.format(org=org), "official_registry_live", accept="application/json")
+    res = _get_retry(http, ENTITY_API.format(org=org), "official_registry_live")
     if res.ok:
         try:
             return _flat_entity(res.json()), res
@@ -333,7 +362,7 @@ def fetch_entity_live(http: Http, org: str) -> tuple[dict | None, FetchResult]:
 
 
 def fetch_roles_live(http: Http, org: str) -> tuple[dict | None, FetchResult]:
-    res = http.get(ROLES_API.format(org=org), "official_roles_live", accept="application/json")
+    res = _get_retry(http, ROLES_API.format(org=org), "official_roles_live")
     if res.ok:
         try:
             return res.json(), res
@@ -343,7 +372,7 @@ def fetch_roles_live(http: Http, org: str) -> tuple[dict | None, FetchResult]:
 
 
 def fetch_subunits_live(http: Http, org: str) -> tuple[list[dict] | None, FetchResult]:
-    res = http.get(SUBUNITS_API.format(org=org), "official_subunits_live", accept="application/json")
+    res = _get_retry(http, SUBUNITS_API.format(org=org), "official_subunits_live")
     if not res.ok:
         return None, res
     try:

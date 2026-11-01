@@ -1,71 +1,68 @@
 {
-  "run_id": "smoke-v3-run-1",
+  "run_id": "smoke-v4-fresh-1",
   "agent": "signalpost-agent",
-  "agent_version": "3.0.0",
+  "agent_version": "4.0.0",
   "provisional": false,
-  "started_at": "2026-10-26T12:42:11Z",
-  "completed_at": "2026-10-26T12:46:28Z",
+  "started_at": "2026-11-01T11:22:37Z",
+  "completed_at": "2026-11-01T11:37:18Z",
   "inputs": 100,
   "emitted_envelopes": 100,
   "operations": {
-    "max_requests": 2000,
-    "requests": 396,
+    "max_requests": 1800,
+    "requests": 625,
     "requests_by_source_class": {
+      "official_registry_bulk": 1,
+      "official_roles_live": 100,
+      "official_subunits_live": 100,
       "official_annual_accounts": 100,
       "official_annual_account_copy": 100,
-      "official_jobs_feed": 79,
+      "official_jobs_feed": 80,
       "open_data_wikidata": 1,
       "company_website_robots": 52,
       "directory_sitemap": 6,
       "directory_page": 1,
-      "company_website": 54,
-      "company_website_feed": 3
+      "company_website": 79,
+      "company_website_feed": 5
     },
-    "bytes": 82064125,
-    "elapsed_s": 257.1,
+    "bytes": 238511417,
+    "elapsed_s": 880.7,
     "third_party_cost_usd": 0.0
   },
   "registry_sources": {
     "entities": {
       "url": "https://data.brreg.no/enhetsregisteret/api/enheter/lastned/csv",
       "path": ".cache\\enheter.csv.gz",
-      "origin": "run_cache",
-      "retrieved_at": "2026-10-15T20:28:58Z",
-      "sha256": "cfd5738e1c0bf808dae004fffd9dfe9a549467b0d5038c872f6df91b828d3041"
+      "origin": "downloaded",
+      "retrieved_at": "2026-11-01T11:28:02Z",
+      "sha256": "4d1c45c02d8fbc7eb5b07bb3317b8f736aa38c25b6bb60e2923c1bbe934ce14e"
     },
     "subunits": {
       "url": "https://data.brreg.no/enhetsregisteret/api/underenheter/lastned/csv",
-      "path": ".cache\\underenheter.csv.gz",
-      "origin": "run_cache",
-      "retrieved_at": "2026-10-15T20:26:02Z",
-      "sha256": "f71a8a12b3570ca51f94be01e7b3d8cad92f3b139621d8fe4660ebb07fa23f56"
+      "origin": "live_api_per_company",
+      "error": "bulk_not_downloaded_by_design"
     },
     "roles": {
       "url": "https://data.brreg.no/enhetsregisteret/api/roller/totalbestand",
-      "path": ".cache\\roller.json.gz",
-      "origin": "run_cache",
-      "retrieved_at": "2026-10-15T20:23:25Z",
-      "sha256": "dd706c82c4e080dd3548cd5a913d3a35e66da042249126aa506ee0f6b9e02f78"
+      "origin": "live_api_per_company",
+      "error": "bulk_not_downloaded_by_design"
     }
   },
   "registry_errors": [],
   "claim_states": {
-    "available": 8573,
+    "available": 8575,
     "not_available": 492,
-    "ambiguous": 2,
-    "failed": 2
+    "ambiguous": 3
   },
   "website_identity_outcomes": {
-    "dead_domain": 49,
+    "dead_domain": 48,
     "shared_site": 5,
-    "strong": 6,
-    "ambiguous": 5,
-    "exact": 3,
-    "unreachable": 2,
+    "strong": 8,
+    "exact": 2,
+    "ambiguous": 6,
     "parked": 1,
-    "conflict": 1
+    "conflict": 2
   },
-  "companies_with_verified_website": 9,
+  "companies_with_verified_website": 10,
   "validation": {
     "passed": true,
     "exact_one_envelope_per_input": true,
@@ -76,6 +73,29 @@
     "third_party_paid_apis": null,
     "cost_usd": 0.0
   },
+  "request_budget": {
+    "requests_total": 625,
+    "companies": 100,
+    "requests_per_company": 6.25,
+    "requests_per_100_companies": 625.0,
+    "published_limit_per_100_companies": 2000,
+    "share_of_limit": 0.312,
+    "cap_used_for_this_run": 1800,
+    "by_source_class": {
+      "official_registry_bulk": 1,
+      "official_roles_live": 100,
+      "official_subunits_live": 100,
+      "official_annual_accounts": 100,
+      "official_annual_account_copy": 100,
+      "official_jobs_feed": 80,
+      "open_data_wikidata": 1,
+      "company_website_robots": 52,
+      "directory_sitemap": 6,
+      "directory_page": 1,
+      "company_website": 79,
+      "company_website_feed": 5
+    }
+  },
   "connectors": {
     "workforce_annual_accounts_ocr": {
       "backend": "rapidocr",
@@ -83,17 +103,17 @@
       "downloaded": 100,
       "accepted": 95,
       "skipped_reason": null,
-      "elapsed_s": 212.5,
+      "elapsed_s": 538.4,
       "processed": 100
     },
     "nav_job_feed": {
       "loaded": true,
       "days": 40,
       "error": null,
-      "ads": 26353,
+      "ads": 26172,
       "pages": 78
     },
-    "nav_confirmed_companies": 0,
+    "nav_confirmed_companies": 1,
     "wikidata_entities": 1,
     "directory_pages": 1
   }

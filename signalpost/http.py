@@ -199,39 +199,71 @@ class Http:
     def get_with_headers(self, url: str, source_class: str, headers: dict, timeout: float = 30.0) -> FetchResult:
         return self.get(url, source_class, timeout=timeout, extra_headers=headers, max_bytes=8_000_000)
 
-    def download(self, url: str, path, source_class: str, timeout: float = 600.0) -> FetchResult:
-        """Stream a large official bulk file to disk (one budgeted request)."""
+    def download(self, url: str, path, source_class: str, timeout: float = 900.0, attempts: int = 6) -> FetchResult:
+        """Stream a large official bulk file to disk, resuming with HTTP Range after a dropped connection.
+
+        Each (re)connection counts as one budgeted request; the whole download is bounded by `timeout` and the run's
+        soft deadline.
+        """
         from pathlib import Path
 
         result = FetchResult(url=url, retrieved_at=utc_now())
-        try:
-            self.budget.take(source_class, reserved="registry")
-        except BudgetExhausted:
-            result.error = "budget_exhausted"
-            return result
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_suffix(target.suffix + ".part")
+        temporary.unlink(missing_ok=True)
         started = time.monotonic()
-        try:
-            with self.session.get(url, timeout=(20, 120), stream=True) as response:
-                result.status = response.status_code
-                result.final_url = response.url
-                result.content_type = response.headers.get("Content-Type", "")
-                if response.status_code != 200:
-                    result.error = f"http_{response.status_code}"
-                    return result
-                total = 0
-                with temporary.open("wb") as handle:
-                    for chunk in response.iter_content(1 << 20):
-                        handle.write(chunk)
-                        total += len(chunk)
-                        if time.monotonic() - started > timeout:
-                            raise requests.Timeout("bulk download exceeded time limit")
-                self.budget.add_bytes(total)
-            temporary.replace(target)
-        except (requests.RequestException, OSError) as exc:
-            result.error = type(exc).__name__
+        expected = None
+        for attempt in range(attempts):
+            if time.monotonic() - started > timeout or self.budget.past_soft_deadline():
+                result.error = result.error or "download_time_limit"
+                break
+            try:
+                self.budget.take(source_class, reserved="registry" if attempt == 0 else False)
+            except BudgetExhausted:
+                result.error = "budget_exhausted"
+                break
+            offset = temporary.stat().st_size if temporary.exists() else 0
+            headers = {"Range": f"bytes={offset}-"} if offset else {}
+            try:
+                with self.session.get(url, timeout=(20, 120), stream=True, headers=headers) as response:
+                    result.status = response.status_code
+                    result.final_url = response.url
+                    result.content_type = response.headers.get("Content-Type", "")
+                    if response.status_code == 200 and offset:
+                        offset = 0  # server ignored Range: start over
+                    elif response.status_code not in (200, 206):
+                        result.error = f"http_{response.status_code}"
+                        if response.status_code in (429, 500, 502, 503, 504):
+                            time.sleep(min(30, 5 * (attempt + 1)))
+                            continue
+                        break
+                    if response.status_code == 200:
+                        expected = int(response.headers.get("Content-Length") or 0) or None
+                    elif expected is None:
+                        total_range = response.headers.get("Content-Range", "").rsplit("/", 1)[-1]
+                        expected = int(total_range) if total_range.isdigit() else None
+                    with temporary.open("ab" if offset else "wb") as handle:
+                        for chunk in response.iter_content(1 << 20):
+                            handle.write(chunk)
+                            self.budget.add_bytes(len(chunk))
+                            if time.monotonic() - started > timeout:
+                                raise requests.Timeout("bulk download exceeded time limit")
+                size = temporary.stat().st_size
+                if expected and size < expected:
+                    result.error = "incomplete"
+                    continue  # resume from where it stopped
+                temporary.replace(target)
+                result.error = None
+                break
+            except requests.Timeout as exc:
+                result.error = type(exc).__name__
+                if time.monotonic() - started > timeout:
+                    break
+            except (requests.RequestException, OSError) as exc:
+                result.error = type(exc).__name__
+                time.sleep(min(10, 2 * (attempt + 1)))  # dropped connection: resume with Range
+        if result.error:
             temporary.unlink(missing_ok=True)
         result.elapsed_ms = int((time.monotonic() - started) * 1000)
         result.retrieved_at = utc_now()

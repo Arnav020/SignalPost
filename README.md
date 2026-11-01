@@ -47,7 +47,8 @@ Refresh history is kept in `--state-dir` (default `state/`). Run the same comman
 
 | Option | Default | Env var |
 |---|---|---|
-| `--max-requests` | 2000 outbound HTTP requests per run | `SIGNALPOST_MAX_REQUESTS` |
+| `--max-requests` | 18 × companies (published limit: 2,000 per 100 companies; 10% margin kept) | `SIGNALPOST_MAX_REQUESTS` |
+| `--requests-per-company` | 18 | `SIGNALPOST_REQUESTS_PER_COMPANY` |
 | `--time-budget-min` | 45 minutes; optional work stops ~12% before the deadline, then outputs are finalized | `SIGNALPOST_TIME_BUDGET_MIN` |
 | `--workers` | 16 network threads | `SIGNALPOST_WORKERS` |
 | `--ocr-workers` | CPU count − 2 (max 12) OCR processes (~110 MB each) | `SIGNALPOST_OCR_WORKERS` |
@@ -96,22 +97,28 @@ where the template prints "1.00") abstain. On random companies the statement is 
   groups, franchises). Published only as `shared_website`; none of its content is attributed to the company.
 * `conflict` / `ambiguous` — a different organisation number is shown, or proof is insufficient: nothing is published.
 
-### Publication rules (v3, after Builderr's 23 Oct audit)
+### Publication rules (v4, after Builderr's audits of 23 Oct and 1 Nov)
 
-* **Own site vs parent/group site.** Content from a website is attributed to the company only when the site is its own.
-  The site is treated as a parent/group (or unconfirmed) site — URL published with `site_relation`, nothing else — when it
-  shows several other organisation numbers, is a foreign domain without this organisation number, is group-branded while
-  the legal name is not, lists "our companies", or names neither the company in its title nor in its domain.
-* **Social links.** A profile is kept only when its handle carries the company's own name, brand or domain. Numeric IDs,
-  theme/site-builder/agency handles and sister-company links are dropped; with several candidates on one platform only a
-  unique best match on the legal name survives.
-* **News.** Only real posts: own article URL on the company's domain (not home, index, menu, category, tag or product
-  pages), a real title, and a genuine publication date (JSON-LD `datePublished`, RSS `pubDate`/`published`, or a date
-  printed on the news card). Feed `updated` and sitemap `lastmod` dates are never used. Jobs come from structured
-  `JobPosting` data (current) or NAV ads confirmed by organisation number — careers-page link labels are not postings.
+* **Own site only — otherwise blank with a reason.** A website's content is attributed only when the site is proven to be
+  the company's own: this organisation number on the site, the full legal name in the site title, or a name-matching
+  domain together with the full legal name on the site. A site that could belong to a parent group or sister company
+  (several other organisation numbers, a foreign parent domain, group branding, an "our companies" page, or a domain that
+  matches only part of the name, e.g. nilsson.no for NILSSON HARAS AS) is left blank: `official_website` is `ambiguous`
+  with the `candidate_url` and a one-line reason, and nothing from that site is published.
+* **Social links.** Kept only when the handle carries the company's own name, brand or domain. Numeric IDs,
+  theme/site-builder/agency handles and sister-company links are dropped.
+* **News — the article itself is checked.** Every candidate article is fetched; it is kept only if it is not a product
+  page, has a genuine publication date (JSON-LD `datePublished`, `article:published_time`, or a `<time>` inside the
+  article — never a feed "updated", sitemap "lastmod" or render date), and its headline or body names the company
+  (legal name or its own verified brand; footer and browser-title mentions do not count).
+* **Jobs.** Only NAV ads confirmed by organisation number, or a structured `JobPosting` whose hiring organisation names
+  the company. A group careers page is not this company's.
 * **Accounts.** "Latest accounts" is the newest filed period of the company's own accounts (cross-checked against the
   registry's latest submitted year) with an explicit fiscal-year label. Company (`SELSKAP`) and group (`KONSERN`)
-  accounts are never mixed; growth is computed only between periods of equal length, written older → newer.
+  accounts are never mixed; growth is computed only against the immediately preceding period of equal length,
+  written older → newer.
+* **Confidence on every link.** Each published fact carries a `confidence`; the viewer shows it next to every fact, and
+  every withheld item shows why.
 
 ## Envelope
 
@@ -162,21 +169,21 @@ Other dependencies: requests (Apache-2.0), beautifulsoup4 (MIT). All pinned in `
 
 ## Smoke test and measured runs
 
-See `smoke-test/` (input, envelopes, run report, viewer, log) and `smoke-test/refresh-rerun/` (same batch rerun against
-the stored state: idempotent refresh). Offline regression tests: `python -m unittest discover -s tests`.
+`smoke-test/` was produced from a **fresh clone**: new folder, empty virtual environment, only `pip install -r
+requirements.txt`, empty cache (registry downloaded during the run), then the run command. `smoke-test/refresh-rerun/`
+is the same batch run again against the stored state. The `request_budget` section of each `run-report.json` gives
+the total request count and requests per 100 companies. Offline regression tests: `python -m unittest discover -s tests`.
 
-Local measurements (16-thread laptop, RapidOCR backend):
-
-| Run | Envelopes | Requests | Wall time | Workforce statements | Verified websites |
+| Run (16-thread laptop, RapidOCR) | Envelopes | Requests | Per 100 companies | Wall time | Workforce statements |
 |---|---|---|---|---|---|
-| 100 random companies, no OCR cache | 100/100 | 441 | 10 min | 95 | 9–11 |
-| smoke-test/ (same 100, OCR cache warm) | 100/100 | 417 | 4 min | 95 | 9 |
-| smoke-test/refresh-rerun/ | 100/100, **0 changes** | 417 | 4 min | 95 | 9 |
-| 1,000 random companies, 2,000-request cap | 1000/1000 | 1,969 | 40 min | 475 (+150 registry counts) | 56 |
-| clean venv, supplied registry snapshot, 5 companies | 5/5 | 109 | 2 min | 5 | — |
+| smoke-test/ — fresh clone, empty cache | 100/100 | 625 | 625 (limit 2,000) | 14.7 min | 95 |
+| smoke-test/refresh-rerun/ | 100/100, **0 changes** | 617 | 617 | 3.9 min | 95 |
 
-Annual-account copies are fetched at most one every 2.1 s (Brønnøysund answers HTTP 429 above ~30/min) with one
-retry; OCR results are cached by PDF content fingerprint so an unchanged filing is not re-read on refresh.
+Request use per 100 companies: 3 registry bulk files for the batch, ~100 entity rows (only if the bulk file is
+unavailable), 200 live role/workplace calls, 100 accounts calls, 100 filing copies, ~80 NAV feed pages for the batch,
+and website pages for the companies that have one. Annual-account copies are fetched at most one every 2.1 s
+(Brønnøysund answers HTTP 429 above ~30/min) with one retry; OCR results are cached by PDF content fingerprint so an
+unchanged filing is not re-read on refresh. Bulk downloads resume with HTTP Range after a dropped connection.
 
 ## Limitations
 

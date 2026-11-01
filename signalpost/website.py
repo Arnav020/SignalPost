@@ -137,6 +137,25 @@ def article_like(url: str, home_url: str | None, index_url: str | None = None) -
     return len(re.split(r"[-_]+", slug)) >= 3 or bool(re.search(r"/20\d\d/|\d{4,}", path))
 
 
+def _strip_site_suffix(title: str) -> str:
+    return re.split(r"\s+[|\u2014\u2013-]\s+", title.strip())[0] if title else title
+
+
+def company_name_matcher(entity: dict, brand: str | None):
+    """True when a text names this company: the legal name as a phrase, or its own distinctive brand."""
+    tokens = name_tokens(entity.get("name", ""))
+    patterns = []
+    if tokens:
+        patterns.append(r"\b" + r"[\W_]{0,3}".join(re.escape(t) for t in tokens) + r"\b")
+    places = {fold(entity.get(k) or "").strip() for k in ("municipality", "business_city", "postal_city")}
+    b = fold(brand or "").strip()
+    b_tokens = [t for t in re.findall(r"[a-z0-9]+", b) if t not in LEGAL_SUFFIXES]
+    if b and b not in GENERIC_BRANDS and len("".join(b_tokens)) >= 4 and " ".join(b_tokens) not in places:
+        patterns.append(r"\b" + r"[\W_]{0,3}".join(re.escape(t) for t in b_tokens) + r"\b")
+    compiled = [re.compile(p) for p in patterns]
+    return lambda text: bool(text) and any(c.search(fold(text)) for c in compiled)
+
+
 def _domain_is_name_part(host: str, tokens: list[str], entity: dict) -> bool:
     """Domain = a distinctive part of the legal name (e.g. evotec.no for ENTEC EVOTEC AS, saltofilm.no for SALTO FILM
     OG FJERNSYN AS). Place names (the company's own municipality/city) are not distinctive: drammen.no does not count."""
@@ -248,6 +267,7 @@ class SiteCrawler:
         if not res.ok or not _is_html(res):
             return res, None
         page = extract_page(res.text(), res.final_url or url)
+        page["retrieved_date"] = (res.retrieved_at or "")[:10]
         record["title"] = page.get("title")
         return res, page
 
@@ -350,6 +370,13 @@ class SiteCrawler:
         sitemap_items: list[dict] = []
         self._evaluate_identity(org, entity, roles, site, pages)
         site.extracted = self._aggregate(org, entity, roles, site, pages, feed_items, sitemap_items)
+        own = site.scope == "full" and site.identity in ("exact", "strong")
+        names = company_name_matcher(entity, site.extracted.get("brand_name"))
+        # Jobs: a posting counts only if it names this company as the hiring organisation (a group careers page does not).
+        site.extracted["job_postings"] = [j for j in site.extracted.get("job_postings", [])
+                                          if own and names(j.get("hiring_organization") or "")]
+        # News: fetch each candidate article; keep it only if the article itself is dated and names the company.
+        site.extracted["news"] = self._verify_news(site, site.extracted.get("news", []), names) if own else []
         return site
 
     def _sitemap(self, site: SiteResult, budget: int) -> list[dict]:
@@ -376,6 +403,34 @@ class SiteCrawler:
             preferred = [c for c in children if re.search(r"post|news|nyhet|artikkel|article|job|stilling", c, re.I)]
             url = (preferred or children)[0]
         return items
+
+    def _verify_news(self, site: SiteResult, items: list[dict], names, max_checks: int = 8) -> list[dict]:
+        verified, checked = [], 0
+        for item in sorted(items, key=lambda n: n.get("date") or "", reverse=True):
+            if checked >= max_checks or self.http.budget.remaining() < 5 or self.http.budget.past_soft_deadline():
+                break
+            url = item.get("url")
+            if not url:
+                continue
+            checked += 1
+            _, page = self._fetch_page(url, site, "article")
+            if page is None or page.get("is_product"):
+                continue
+            date = page.get("published_date") or (item.get("date") if item.get("method") == "jsonld_article" else None)
+            if not valid_publish_date(date):
+                continue
+            # The headline/body must name the company; a "— Brand" suffix in the browser title does not count.
+            title = page.get("h1") or _strip_site_suffix(page.get("og_title") or item.get("title") or "")
+            if date[:10] >= (page.get("retrieved_date") or "9999") and item.get("method") != "jsonld_article":
+                continue  # a "published today" stamp on every page is the render date, not a publish date
+            if not names(" ".join(filter(None, [page.get("h1"), page.get("main_text")]))):
+                continue
+            if not real_title(title):
+                continue
+            record = next((p for p in reversed(site.pages) if p.get("requested_url") == url), {})
+            verified.append({"title": title.strip()[:200], "url": record.get("final_url") or url, "date": date[:10], "source_url": url,
+                             "method": "article_page_verified", "date_kind": "published", "names_company": True})
+        return verified
 
     # ------------------------------------------------------------------ identity gate
     def _evaluate_identity(self, org: str, entity: dict, roles: list[dict], site: SiteResult, pages: list[tuple[str, dict]]) -> None:
@@ -468,8 +523,14 @@ class SiteCrawler:
             reasons.append("group_branded_site")
         if GROUP_LISTING.search(body_text[:30000]) and org not in all_orgs:
             reasons.append("site_lists_group_companies")
-        if org not in all_orgs and not name_in_head and not domain_name and not _domain_is_name_part(cand.host, tokens, entity):
-            reasons.append("company_name_not_in_site_title_or_domain")
+        # Own-site proof: our organisation number, the full legal name in the site title, or a name-matching domain
+        # together with the full legal name on the site. A partial name match alone (nilsson.no for NILSSON HARAS AS)
+        # can be a sister company and is not enough.
+        domain_part = _domain_is_name_part(cand.host, tokens, entity)
+        own_proof = org in all_orgs or name_in_head or ((domain_name or domain_part) and name_match)
+        if not own_proof:
+            reasons.append("company_name_not_in_site_title_or_domain" if not (domain_name or domain_part)
+                           else "partial_name_domain_possible_sister_company")
         site.scope = "url_only" if reasons else "full"
         site.scope_reasons = reasons
 
@@ -557,19 +618,19 @@ class SiteCrawler:
             if kind == "news":
                 news_page = {"url": url, "title": page.get("title")}
                 for link in page["internal_links"]:
-                    # Only cards that carry their own publish date in the link text; menu labels have none.
-                    date = parse_date(link["label"])
-                    if date and classify_url(link["url"]) == "news":
-                        title = re.sub(r"\s*\b\d{1,2}\.\s*\w+\s+20\d\d\b|\b\d{1,2}\.\d{1,2}\.20\d\d\b|\b20\d\d-\d{2}-\d{2}\b", " ", link["label"]).strip(" -|·,")
-                        news.append({"title": title, "url": link["url"], "date": date, "source_url": url, "method": "news_page_dated_link"})
+                    # Article links on the news page are only candidates: each is fetched and must prove itself
+                    # (own article page, publish date, names the company) in _verify_news.
+                    index_path = urlsplit(url).path.rstrip("/")
+                    in_section = bool(index_path) and urlsplit(link["url"]).path.startswith(index_path + "/")
+                    if (classify_url(link["url"]) == "news" or in_section) and article_like(link["url"], site.home_url, url):
+                        date = parse_date(link["label"])
+                        news.append({"title": link["label"], "url": link["url"], "date": date, "source_url": url, "method": "news_page_link"})
         for item in feed_items:
             news.append({"title": item["title"], "url": item["url"], "date": item.get("date"), "source_url": item["source_url"], "method": "rss_feed"})
         # Keep only real, dated, company-owned posts with their own article URL.
         own = host_key(site.home_url)
         index_url = (news_page or {}).get("url")
-        news = [n for n in news
-                if valid_publish_date(n.get("date")) and real_title(n.get("title")) and article_like(n.get("url"), site.home_url, index_url)
-                and host_key(n.get("url") or "") == own]
+        news = [n for n in news if article_like(n.get("url"), site.home_url, index_url) and host_key(n.get("url") or "") == own]
         # Dedupe and keep the most recent first.
         def dedupe(items):
             out, seen = [], set()

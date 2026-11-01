@@ -87,8 +87,6 @@ def run(args) -> int:
     run_id = args.run_id or datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ")
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    budget = Budget(args.max_requests, args.time_budget_min * 60, reserve_s=max(120, args.time_budget_min * 60 * 0.18))
-    http = Http(budget, workers=args.workers)
     raw_inputs = read_inputs(Path(args.input))
     orgs: list[str] = []
     invalid: list[str] = []
@@ -98,7 +96,13 @@ def run(args) -> int:
             invalid.append(raw)
         orgs.append(org or raw)
     unique = list(dict.fromkeys(o for o in orgs if normalize_org(o)))
-    log(f"{AGENT_NAME} {__version__}: {len(raw_inputs)} inputs ({len(unique)} unique valid), budget {args.max_requests} requests / {args.time_budget_min} min")
+    # Published limit: 2,000 outbound requests per 100 companies. Default cap keeps a 10% margin under it.
+    if args.max_requests is None:
+        args.max_requests = max(200, int(len(unique) * args.requests_per_company))
+    budget = Budget(args.max_requests, args.time_budget_min * 60, reserve_s=max(120, args.time_budget_min * 60 * 0.18))
+    http = Http(budget, workers=args.workers)
+    log(f"{AGENT_NAME} {__version__}: {len(raw_inputs)} inputs ({len(unique)} unique valid), budget {args.max_requests} requests "
+        f"({args.max_requests / max(1, len(unique)) * 100:.0f} per 100 companies) / {args.time_budget_min} min")
 
     # Mandatory phases first: registry bulk (3) and one accounts call per company.
     budget.reserve(3, "registry")
@@ -364,16 +368,20 @@ def run(args) -> int:
                 add_directory_claims(env, directory_pages.get(org))
                 # A connector that failed this run must not look like a removal on refresh: record it as failed.
                 if wikidata_failed and org not in wikidata:
+                    env.failed_sources.add("wikidata")
                     env.absent("legal_identity_and_brand", "wikidata_entity", "failed", "Wikidata could not be queried in this run.")
                     env.absent("hiring_and_activity", "wikipedia_article", "failed", "Wikidata could not be queried in this run.")
                 page = directory_pages.get(org)
                 if directory_failed or (page and page.get("status") == "error"):
+                    env.failed_sources.add("directory")
                     env.absent("website_and_profiles", "directory_profile", "failed", "The directory could not be read in this run.")
                 add_workforce_claims(env, workforce_results.get(org), workforce_status, bool(entity.get("employees")))
                 add_registry_activity(env, entity, roles.get(org), parsed)
                 env.drop_superseded_absences()
             prev = previous_from_file.get(org) or store.load(org)
-            web_checked = org in sites and sites[org] is not None and sites[org].identity not in ("blocked",)
+            web_checked = org in sites and sites[org] is not None and sites[org].identity not in ("blocked", "unreachable")
+            if org in sites and sites[org] is not None and sites[org].identity in ("blocked", "unreachable"):
+                env.failed_sources.add("website")
             changes, state = apply_refresh(env, prev, now, web_checked or not cands[org][0])
             env.changes = changes
             env.previous_run_id = (prev or {}).get("last_run_id")
@@ -384,6 +392,17 @@ def run(args) -> int:
             env.errors.append({"stage": "assemble", "error": f"{type(exc).__name__}: {exc}", "trace": traceback.format_exc(limit=3)})
             env.failed = True
     report = write_outputs(out_dir, raw_inputs, orgs, envs, entities, sites, run_id, started_at, budget, registry, provisional=False)
+    total = budget.requests
+    report["request_budget"] = {
+        "requests_total": total,
+        "companies": len(unique),
+        "requests_per_company": round(total / max(1, len(unique)), 2),
+        "requests_per_100_companies": round(total / max(1, len(unique)) * 100, 1),
+        "published_limit_per_100_companies": 2000,
+        "share_of_limit": round(total / max(1, len(unique)) * 100 / 2000, 3),
+        "cap_used_for_this_run": budget.max_requests,
+        "by_source_class": budget.snapshot()["requests_by_source_class"],
+    }
     report["connectors"] = {
         "workforce_annual_accounts_ocr": workforce_status,
         "nav_job_feed": {k: v for k, v in nav_status.items() if k != "retrieved_at"},
@@ -478,7 +497,10 @@ def main(argv=None) -> int:
     parser.add_argument("--input", "-i", required=True, help="Batch file: JSONL/JSON/CSV/TXT of organisation numbers")
     parser.add_argument("--output-dir", "-o", default="out", help="Writes envelopes.jsonl, run-report.json and report.html")
     parser.add_argument("--run-id")
-    parser.add_argument("--max-requests", type=int, default=int(os.environ.get("SIGNALPOST_MAX_REQUESTS", 2000)))
+    parser.add_argument("--max-requests", type=int, default=int(os.environ["SIGNALPOST_MAX_REQUESTS"]) if os.environ.get("SIGNALPOST_MAX_REQUESTS") else None,
+                        help="Hard cap on outbound requests (default: --requests-per-company x companies)")
+    parser.add_argument("--requests-per-company", type=float, default=float(os.environ.get("SIGNALPOST_REQUESTS_PER_COMPANY", 18)),
+                        help="Default cap per company; the published limit is 2,000 per 100 companies (20)")
     parser.add_argument("--time-budget-min", type=float, default=float(os.environ.get("SIGNALPOST_TIME_BUDGET_MIN", 45)))
     parser.add_argument("--workers", type=int, default=int(os.environ.get("SIGNALPOST_WORKERS", 16)))
     parser.add_argument("--pages-per-site", type=int, default=7)
