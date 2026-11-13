@@ -106,14 +106,17 @@ def backend_name() -> str | None:
     forced = os.environ.get("SIGNALPOST_OCR_BACKEND", "").strip().lower()
     if forced in ("none", "off"):
         return None
-    if forced == "rapidocr":
-        return "rapidocr"
-    if shutil.which("tesseract"):
-        return "tesseract"
     try:
         import importlib.util
 
-        if importlib.util.find_spec("rapidocr_onnxruntime") and importlib.util.find_spec("pypdfium2"):
+        # Every backend renders pages with pypdfium2 + Pillow; without them the connector is skipped, never fatal.
+        if not (importlib.util.find_spec("pypdfium2") and importlib.util.find_spec("PIL")):
+            return None
+        if forced == "rapidocr":
+            return "rapidocr" if importlib.util.find_spec("rapidocr_onnxruntime") else None
+        if shutil.which("tesseract"):
+            return "tesseract"
+        if importlib.util.find_spec("rapidocr_onnxruntime"):
             return "rapidocr"
     except Exception:
         return None
@@ -136,7 +139,7 @@ def _ocr_image(image) -> str:
             path = os.path.join(tmp, "page.png")
             image.save(path)
             out = subprocess.run(["tesseract", path, "stdout", "-l", "nor+eng" if _has_nor() else "eng", "--psm", "6"],
-                                 capture_output=True, text=True, timeout=90)
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
             return out.stdout
     import numpy as np
 
@@ -151,7 +154,7 @@ def _has_nor() -> bool:
     global _NOR
     if _NOR is None:
         try:
-            out = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=20)
+            out = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
             _NOR = "nor" in out.stdout.split()
         except Exception:
             _NOR = False

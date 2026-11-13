@@ -12,7 +12,9 @@ No paid APIs, no LLM, no personal credentials: **expected third-party cost per o
 
 ## Run it (one command)
 
-Python 3.12+. From a clean clone:
+Python 3.12 or newer (tested from a clean clone on Python 3.12 and 3.13). Python 3.12 is recommended: the optional
+OCR packages that read workforce from annual-account copies have Linux wheels for 3.12 only, so on 3.13+ they are
+skipped automatically and that one connector is reported as `blocked`; everything else runs unchanged. From a clean clone:
 
 ```bash
 python -m venv .venv && . .venv/bin/activate          # Windows: .venv\Scripts\activate
