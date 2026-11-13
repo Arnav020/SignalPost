@@ -1,40 +1,40 @@
 {
-  "run_id": "smoke-v4-fresh-1",
+  "run_id": "run-20261113T191050Z",
   "agent": "signalpost-agent",
-  "agent_version": "4.0.0",
+  "agent_version": "4.0.1",
   "provisional": false,
-  "started_at": "2026-11-01T11:22:37Z",
-  "completed_at": "2026-11-01T11:37:18Z",
+  "started_at": "2026-11-13T19:10:50Z",
+  "completed_at": "2026-11-13T19:22:33Z",
   "inputs": 100,
   "emitted_envelopes": 100,
   "operations": {
     "max_requests": 1800,
-    "requests": 625,
+    "requests": 618,
     "requests_by_source_class": {
       "official_registry_bulk": 1,
       "official_roles_live": 100,
       "official_subunits_live": 100,
       "official_annual_accounts": 100,
       "official_annual_account_copy": 100,
-      "official_jobs_feed": 80,
+      "official_jobs_feed": 83,
       "open_data_wikidata": 1,
       "company_website_robots": 52,
       "directory_sitemap": 6,
       "directory_page": 1,
-      "company_website": 79,
+      "company_website": 69,
       "company_website_feed": 5
     },
-    "bytes": 238511417,
-    "elapsed_s": 880.7,
+    "bytes": 237652422,
+    "elapsed_s": 702.6,
     "third_party_cost_usd": 0.0
   },
   "registry_sources": {
     "entities": {
       "url": "https://data.brreg.no/enhetsregisteret/api/enheter/lastned/csv",
-      "path": ".cache\\enheter.csv.gz",
+      "path": ".cache/enheter.csv.gz",
       "origin": "downloaded",
-      "retrieved_at": "2026-11-01T11:28:02Z",
-      "sha256": "4d1c45c02d8fbc7eb5b07bb3317b8f736aa38c25b6bb60e2923c1bbe934ce14e"
+      "retrieved_at": "2026-11-13T19:14:43Z",
+      "sha256": "e364596c2345e5889df932cd410bf6dd5f31a8f735c817f0f89c20de228739c8"
     },
     "subunits": {
       "url": "https://data.brreg.no/enhetsregisteret/api/underenheter/lastned/csv",
@@ -49,20 +49,19 @@
   },
   "registry_errors": [],
   "claim_states": {
-    "available": 8575,
-    "not_available": 492,
+    "available": 8582,
+    "not_available": 493,
     "ambiguous": 3
   },
   "website_identity_outcomes": {
-    "dead_domain": 48,
+    "dead_domain": 53,
     "shared_site": 5,
-    "strong": 8,
-    "exact": 2,
-    "ambiguous": 6,
-    "parked": 1,
-    "conflict": 2
+    "ambiguous": 4,
+    "strong": 6,
+    "exact": 3,
+    "conflict": 1
   },
-  "companies_with_verified_website": 10,
+  "companies_with_verified_website": 9,
   "validation": {
     "passed": true,
     "exact_one_envelope_per_input": true,
@@ -74,12 +73,12 @@
     "cost_usd": 0.0
   },
   "request_budget": {
-    "requests_total": 625,
+    "requests_total": 618,
     "companies": 100,
-    "requests_per_company": 6.25,
-    "requests_per_100_companies": 625.0,
+    "requests_per_company": 6.18,
+    "requests_per_100_companies": 618.0,
     "published_limit_per_100_companies": 2000,
-    "share_of_limit": 0.312,
+    "share_of_limit": 0.309,
     "cap_used_for_this_run": 1800,
     "by_source_class": {
       "official_registry_bulk": 1,
@@ -87,12 +86,12 @@
       "official_subunits_live": 100,
       "official_annual_accounts": 100,
       "official_annual_account_copy": 100,
-      "official_jobs_feed": 80,
+      "official_jobs_feed": 83,
       "open_data_wikidata": 1,
       "company_website_robots": 52,
       "directory_sitemap": 6,
       "directory_page": 1,
-      "company_website": 79,
+      "company_website": 69,
       "company_website_feed": 5
     }
   },
@@ -103,15 +102,15 @@
       "downloaded": 100,
       "accepted": 95,
       "skipped_reason": null,
-      "elapsed_s": 538.4,
+      "elapsed_s": 457.2,
       "processed": 100
     },
     "nav_job_feed": {
       "loaded": true,
       "days": 40,
       "error": null,
-      "ads": 26172,
-      "pages": 78
+      "ads": 26657,
+      "pages": 80
     },
     "nav_confirmed_companies": 1,
     "wikidata_entities": 1,

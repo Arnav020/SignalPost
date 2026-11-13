@@ -176,10 +176,13 @@ requirements.txt`, empty cache (registry downloaded during the run), then the ru
 is the same batch run again against the stored state. The `request_budget` section of each `run-report.json` gives
 the total request count and requests per 100 companies. Offline regression tests: `python -m unittest discover -s tests`.
 
-| Run (16-thread laptop, RapidOCR) | Envelopes | Requests | Per 100 companies | Wall time | Workforce statements |
+| Run (v4.0.1, Linux, Python 3.12, 16 threads, RapidOCR) | Envelopes | Requests | Per 100 companies | Wall time | Workforce statements |
 |---|---|---|---|---|---|
-| smoke-test/ — fresh clone, empty cache | 100/100 | 625 | 625 (limit 2,000) | 14.7 min | 95 |
-| smoke-test/refresh-rerun/ | 100/100, **0 changes** | 617 | 617 | 3.9 min | 95 |
+| smoke-test/ — fresh clone, empty cache | 100/100 | 618 | 618 (limit 2,000) | 11.7 min | 95 |
+| smoke-test/refresh-rerun/ | 100/100, 1 company changed (a website found on the recheck) | 643 | 643 | 3.8 min | 95 |
+
+The same commit was also installed and run from a fresh clone on Python 3.13 (Windows) and 3.14 (Linux): one valid
+envelope per input, with the OCR connector reported as `blocked`.
 
 Request use per 100 companies: 3 registry bulk files for the batch, ~100 entity rows (only if the bulk file is
 unavailable), 200 live role/workplace calls, 100 accounts calls, 100 filing copies, ~80 NAV feed pages for the batch,
